@@ -7,7 +7,8 @@ import Foundation
 import Combine
 
 enum RotationError: LocalizedError {
-    case noFilePath
+    case noFileSelected
+    case accessDenied(String)
     case fileNotFound(String)
     case invalidJSON(String)
     case rootNotObject
@@ -15,8 +16,10 @@ enum RotationError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noFilePath:
-            return "No JSON file path is configured in Settings."
+        case .noFileSelected:
+            return "No target file selected. Choose one in Settings."
+        case .accessDenied(let path):
+            return "Could not access the selected file: \(path)"
         case .fileNotFound(let path):
             return "File not found: \(path)"
         case .invalidJSON(let path):
@@ -36,20 +39,20 @@ enum RotationError: LocalizedError {
 ///
 /// If `proxy` is nil (or has no usable URL) the proxy variables are removed,
 /// so a key without an assigned proxy clears any previously written proxy.
-func writeKey(_ key: APIKey, proxy: Proxy?, toPath path: String) throws {
-    let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { throw RotationError.noFilePath }
-
-    let expanded = (trimmed as NSString).expandingTildeInPath
-    let url = URL(fileURLWithPath: expanded)
-
-    guard FileManager.default.fileExists(atPath: expanded) else {
-        throw RotationError.fileNotFound(expanded)
+///
+/// `url` must already be a resolved, security-scoped URL with access open (see
+/// `AppStore.withTargetAccess`). The write is NOT atomic: a file-scoped sandbox
+/// bookmark grants access to the file itself but not to its parent directory, so
+/// the temp-file-and-rename trick `.atomic` relies on is unavailable. The file
+/// is tiny, so the in-place write is effectively instantaneous.
+func writeKey(_ key: APIKey, proxy: Proxy?, to url: URL) throws {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+        throw RotationError.fileNotFound(url.path)
     }
 
     let data = try Data(contentsOf: url)
     let parsed = try? JSONSerialization.jsonObject(with: data, options: [])
-    guard let parsed else { throw RotationError.invalidJSON(expanded) }
+    guard let parsed else { throw RotationError.invalidJSON(url.path) }
     guard var root = parsed as? [String: Any] else { throw RotationError.rootNotObject }
 
     root["apiKeyHelper"] = "echo '\(key.apiKey)'"
@@ -72,7 +75,7 @@ func writeKey(_ key: APIKey, proxy: Proxy?, toPath path: String) throws {
     // so URLs stay readable and preserved fields keep their original look.
     let text = String(decoding: output, as: UTF8.self)
         .replacingOccurrences(of: "\\/", with: "/")
-    try Data(text.utf8).write(to: url, options: .atomic)
+    try Data(text.utf8).write(to: url)
 }
 
 @MainActor
@@ -128,7 +131,9 @@ final class RotationManager: ObservableObject {
     /// the timer. If rotation is running, the next tick continues after this key.
     func apply(_ key: APIKey) {
         do {
-            try writeKey(key, proxy: store.proxy(for: key), toPath: store.filePath)
+            try store.withTargetAccess { url in
+                try writeKey(key, proxy: store.proxy(for: key), to: url)
+            }
             store.currentKeyID = key.id
             store.lastRotation = Date()
             store.lastError = nil
@@ -167,7 +172,9 @@ final class RotationManager: ObservableObject {
         let key = enabled[index]
 
         do {
-            try writeKey(key, proxy: store.proxy(for: key), toPath: store.filePath)
+            try store.withTargetAccess { url in
+                try writeKey(key, proxy: store.proxy(for: key), to: url)
+            }
             store.currentKeyID = key.id
             store.lastRotation = Date()
             store.lastError = nil

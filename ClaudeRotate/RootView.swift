@@ -729,23 +729,28 @@ struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var rotation: RotationManager
 
-    @FocusState private var filePathFocused: Bool
-
     var body: some View {
         Form {
             Section {
-                HStack {
-                    TextField("~/.claude/settings.json", text: $store.filePath)
-                        .textFieldStyle(.roundedBorder)
-                        .focused($filePathFocused)
-                        .onChange(of: filePathFocused) { _, focused in
-                            if !focused { store.save() }
-                        }
-                        .onSubmit { store.save() }
-                    Button(store.tr("Обзор…", "Browse…")) { browse() }
+                HStack(spacing: 8) {
+                    Image(systemName: store.hasTargetFile ? "doc.text.fill" : "doc.text")
+                        .foregroundStyle(store.hasTargetFile ? .green : .secondary)
+                    Text(store.filePath.isEmpty
+                         ? store.tr("Файл не выбран", "No file selected")
+                         : store.filePath)
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundStyle(store.filePath.isEmpty ? .secondary : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button(store.tr("Выбрать…", "Choose…")) { browse() }
                 }
             } header: {
                 Label(store.tr("Целевой файл", "Target File"), systemImage: "doc.text")
+            } footer: {
+                Text(store.tr("Выберите файл settings.json. Доступ к нему сохраняется между запусками.",
+                              "Pick your settings.json. Access to it is preserved across launches."))
             }
 
             Section {
@@ -793,8 +798,7 @@ struct SettingsView: View {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.json]
         if panel.runModal() == .OK, let url = panel.url {
-            store.filePath = url.path
-            store.save()
+            store.setTargetFile(url)
         }
     }
 }

@@ -15,10 +15,17 @@ final class AppStore: ObservableObject {
     // on focus change, discrete actions, the "Save" button, and app backgrounding.
     @Published var keys: [APIKey] = []
     @Published var proxies: [Proxy] = []
+    // Display-only path of the selected target file (resolved from the bookmark).
+    // Under App Sandbox actual file access goes through `fileBookmark`, NOT this.
     @Published var filePath: String = ""
     @Published var intervalMinutes: Int = 30
     @Published var startOnLaunch: Bool = false
     @Published var language: AppLanguage = .systemDefault
+
+    // Security-scoped bookmark to the user-selected target file. Persisted; used
+    // to regain access to the file across launches under App Sandbox. Not shown
+    // in the UI directly (the readable path lives in `filePath`).
+    private var fileBookmark: Data?
 
     // Transient runtime state (not persisted)
     @Published var isRunning: Bool = false
@@ -40,6 +47,7 @@ final class AppStore: ObservableObject {
         var keys: [APIKey]
         var proxies: [Proxy]?
         var filePath: String
+        var fileBookmark: Data?
         var intervalMinutes: Int
         var startOnLaunch: Bool
         var currentKeyID: UUID?
@@ -55,13 +63,8 @@ final class AppStore: ObservableObject {
         return dir.appendingPathComponent("config.json")
     }
 
-    static let defaultFilePath = "~/.claude/settings.json"
-
     init() {
         load()
-        if filePath.isEmpty {
-            filePath = Self.defaultFilePath
-        }
     }
 
     private func load() {
@@ -74,6 +77,7 @@ final class AppStore: ObservableObject {
         keys = config.keys
         proxies = config.proxies ?? []
         filePath = config.filePath
+        fileBookmark = config.fileBookmark
         intervalMinutes = max(1, config.intervalMinutes)
         startOnLaunch = config.startOnLaunch
         language = config.language ?? .systemDefault
@@ -88,6 +92,7 @@ final class AppStore: ObservableObject {
         let config = Config(keys: keys,
                             proxies: proxies,
                             filePath: filePath,
+                            fileBookmark: fileBookmark,
                             intervalMinutes: intervalMinutes,
                             startOnLaunch: startOnLaunch,
                             currentKeyID: currentKeyID,
@@ -96,6 +101,59 @@ final class AppStore: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(config) else { return }
         try? data.write(to: Self.configURL, options: .atomic)
+    }
+
+    // MARK: - Target file access (App Sandbox)
+
+    var hasTargetFile: Bool { fileBookmark != nil }
+
+    /// Stores a security-scoped bookmark for the user-selected target file so the
+    /// app can keep accessing it across launches under App Sandbox.
+    func setTargetFile(_ url: URL) {
+        do {
+            let bookmark = try url.bookmarkData(options: [.withSecurityScope],
+                                                includingResourceValuesForKeys: nil,
+                                                relativeTo: nil)
+            fileBookmark = bookmark
+            filePath = url.path
+            lastError = nil
+            save()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// Resolves the bookmark, opens security-scoped access, runs `body` with the
+    /// resolved URL, then releases access. Refreshes a stale bookmark in place.
+    func withTargetAccess<T>(_ body: (URL) throws -> T) throws -> T {
+        guard let bookmark = fileBookmark else { throw RotationError.noFileSelected }
+
+        var stale = false
+        let url: URL
+        do {
+            url = try URL(resolvingBookmarkData: bookmark,
+                          options: [.withSecurityScope],
+                          relativeTo: nil,
+                          bookmarkDataIsStale: &stale)
+        } catch {
+            throw RotationError.accessDenied(error.localizedDescription)
+        }
+
+        guard url.startAccessingSecurityScopedResource() else {
+            throw RotationError.accessDenied(url.path)
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+
+        if stale,
+           let fresh = try? url.bookmarkData(options: [.withSecurityScope],
+                                             includingResourceValuesForKeys: nil,
+                                             relativeTo: nil) {
+            fileBookmark = fresh
+            filePath = url.path
+            save()
+        }
+
+        return try body(url)
     }
 
     // MARK: - CRUD

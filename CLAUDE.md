@@ -20,9 +20,22 @@
 обратно с `[.prettyPrinted, .sortedKeys]`; экранирование слешей убирается. Все прочие
 ключи и значения сохраняются (порядок ключей может нормализоваться).
 
+Запись **неатомарная** (`Data.write(to:)` без `.atomic`). Причина: под App Sandbox
+bookmark даёт доступ только к самому файлу, но не к его каталогу, а `.atomic` создаёт
+временный файл рядом и делает rename — для этого нужен доступ к директории. Файл
+крошечный, запись занимает доли мс, риск повреждения при сбое минимален.
+
 ## Ключевые решения
-- **Песочница (App Sandbox) отключена** (`ENABLE_APP_SANDBOX = NO`) — приложение
-  читает/пишет файл по произвольному пути, указанному вручную в настройках.
+- **Песочница (App Sandbox) включена** (`ENABLE_APP_SANDBOX = YES`, entitlements в
+  `ClaudeRotate/ClaudeRotate.entitlements`) — требование Mac App Store. Доступ к
+  целевому файлу — только через **security-scoped bookmark**: пользователь выбирает
+  файл вручную (`NSOpenPanel`), приложение хранит bookmark (`AppStore.fileBookmark`,
+  app-scope) и перед каждым чтением/записью открывает доступ через
+  `AppStore.withTargetAccess`. Произвольный ввод пути текстом больше не поддерживается;
+  `filePath` остаётся только для отображения. При обновлении со старой (несендбокс)
+  версии bookmark отсутствует — пользователь должен один раз заново выбрать файл.
+  Entitlements: `app-sandbox`, `network.client` (проверка ключей и прокси),
+  `files.user-selected.read-write`, `files.bookmarks.app-scope`.
 - **Иконка в Dock + значок в меню-баре** — флаг `LSUIElement` не задан, приложение
   отображается и в Dock, и в трее.
 - `apiKeyHelper` формируется автоматически из API-ключа.
@@ -49,19 +62,25 @@
   сессии); транспортная ошибка = недоступен. UI-состояние — `ProxyTestState`.
 - `ClaudeRotate/AppLanguage.swift` — перечисление языка интерфейса (`russian`/`english`),
   `displayName`, `systemDefault` (по локали системы).
+- `ClaudeRotate/ClaudeRotate.entitlements` — entitlements песочницы (см. «Ключевые решения»).
 - `ClaudeRotate/AppStore.swift` — единый источник данных (`ObservableObject`),
   хранение конфигурации в `~/Library/Application Support/ClaudeRotate/config.json`, CRUD
   ключей и прокси (`proxy(for:)` резолвит прокси ключа), локализация через `tr(ru, en)`.
-- `ClaudeRotate/RotationEngine.swift` — `writeKey(_:proxy:toPath:)` (запись ключа и
-  прокси в целевой файл) и `RotationManager` (таймер,
-  `start`/`stop`/`rotateNow`/`rotatePrevious`/`applyCurrentKey`).
+  Доступ к целевому файлу: `setTargetFile(_:)` (создаёт bookmark из выбранного URL),
+  `withTargetAccess(_:)` (резолвит bookmark, открывает security-scoped доступ,
+  обновляет устаревший bookmark), `hasTargetFile`.
+- `ClaudeRotate/RotationEngine.swift` — `writeKey(_:proxy:to:)` (запись ключа и прокси
+  в уже резолвнутый security-scoped URL, неатомарно) и `RotationManager` (таймер,
+  `start`/`stop`/`rotateNow`/`rotatePrevious`/`applyCurrentKey`; запись идёт через
+  `store.withTargetAccess`). `RotationError` включает `noFileSelected`/`accessDenied`.
 - `ClaudeRotate/ClaudeRotateApp.swift` — точка входа: `MenuBarExtra` (меню в трее)
   и окно настроек; автостарт ротации при запуске.
 - `ClaudeRotate/RootView.swift` — UI: вкладка «Обзор» (`DashboardView`: карточка
   текущего ключа с прокси, статус ротации с таймером и кнопкой Запустить/Остановить,
   карточки предыдущего/следующего ключа, кнопки «Предыдущий»/«Следующий»), вкладка
   «Ключи» (CRUD/включение/порядок, привязка прокси в редакторе), вкладка «Прокси»
-  (`ProxiesView`: CRUD/порядок/проверка прокси) и вкладка «Настройки» (путь к файлу, интервал,
+  (`ProxiesView`: CRUD/порядок/проверка прокси) и вкладка «Настройки» (выбор целевого
+  файла кнопкой «Выбрать…» через `NSOpenPanel` → `store.setTargetFile`, интервал,
   автостарт, язык интерфейса, статус). Все строки UI — через `store.tr(...)`.
 - `ClaudeRotate.xcodeproj/project.pbxproj` — настройки сборки (группа файлов
   синхронизируется с ФС: новые `.swift`-файлы подхватываются автоматически).
