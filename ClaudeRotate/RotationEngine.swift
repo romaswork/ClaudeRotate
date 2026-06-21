@@ -74,7 +74,10 @@ final class RotationManager: ObservableObject {
         self.store = store
     }
 
-    func start() {
+    /// Starts the rotation timer. When `immediate` is true the next key is applied
+    /// right away; pass false to keep the currently active key for the first
+    /// interval (e.g. when a restored key was just applied on launch).
+    func start(immediate: Bool = true) {
         stop()
         store.isRunning = true
         let interval = TimeInterval(max(1, store.intervalMinutes) * 60)
@@ -84,8 +87,19 @@ final class RotationManager: ObservableObject {
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
-        // Rotate immediately so the first key is applied without waiting.
-        rotateNow()
+        if immediate {
+            rotateNow()
+        }
+    }
+
+    /// Writes the last active key (restored from config) to the target file.
+    /// Returns true if a key was applied. Used on launch so the file immediately
+    /// reflects the key that was active in the previous session.
+    @discardableResult
+    func applyCurrentKey() -> Bool {
+        guard let key = store.currentKey else { return false }
+        apply(key)
+        return true
     }
 
     func stop() {
@@ -107,6 +121,7 @@ final class RotationManager: ObservableObject {
             store.currentKeyID = key.id
             store.lastRotation = Date()
             store.lastError = nil
+            store.save()
         } catch {
             store.lastError = error.localizedDescription
         }
@@ -114,26 +129,38 @@ final class RotationManager: ObservableObject {
 
     /// Applies the next enabled key (wrapping around) to the target file.
     func rotateNow() {
+        rotate(by: 1)
+    }
+
+    /// Applies the previous enabled key (wrapping around) to the target file.
+    func rotatePrevious() {
+        rotate(by: -1)
+    }
+
+    /// Applies the enabled key `offset` positions away from the current one
+    /// (wrapping around). If no key is active yet, applies the first enabled key.
+    private func rotate(by offset: Int) {
         let enabled = store.enabledKeys
         guard !enabled.isEmpty else {
             store.lastError = RotationError.noEnabledKeys.localizedDescription
             return
         }
 
-        let nextIndex: Int
+        let index: Int
         if let current = store.currentKeyID,
            let idx = enabled.firstIndex(where: { $0.id == current }) {
-            nextIndex = (idx + 1) % enabled.count
+            index = ((idx + offset) % enabled.count + enabled.count) % enabled.count
         } else {
-            nextIndex = 0
+            index = 0
         }
-        let key = enabled[nextIndex]
+        let key = enabled[index]
 
         do {
             try writeKey(key, toPath: store.filePath)
             store.currentKeyID = key.id
             store.lastRotation = Date()
             store.lastError = nil
+            store.save()
         } catch {
             store.lastError = error.localizedDescription
         }

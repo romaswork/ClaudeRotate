@@ -23,18 +23,30 @@
 - **Иконка в Dock + значок в меню-баре** — флаг `LSUIElement` не задан, приложение
   отображается и в Dock, и в трее.
 - `apiKeyHelper` формируется автоматически из API-ключа.
+- **Локализация интерфейса** (RU/EN) — не через `.strings`/`.lproj`, а через
+  `AppStore.tr(ru, en)`: строки задаются прямо в коде парами, выбранный язык хранится
+  в конфиге (`language`), смена применяется мгновенно без перезапуска (т.к. `language`
+  — `@Published`, любой вызов `tr` в `body` перерисовывается). Все новые строки UI
+  обязательно оборачивать в `store.tr(...)`.
 
 ## Структура проекта
 - `ClaudeRotate/APIKey.swift` — модель ключа (id, name, apiKey, baseURL, enabled).
+- `ClaudeRotate/AppLanguage.swift` — перечисление языка интерфейса (`russian`/`english`),
+  `displayName`, `systemDefault` (по локали системы).
 - `ClaudeRotate/AppStore.swift` — единый источник данных (`ObservableObject`),
-  хранение конфигурации в `~/Library/Application Support/ClaudeRotate/config.json`, CRUD.
+  хранение конфигурации в `~/Library/Application Support/ClaudeRotate/config.json`, CRUD,
+  локализация через `tr(ru, en)` (читает `language`, реактивно обновляет UI).
 - `ClaudeRotate/RotationEngine.swift` — `writeKey(toPath:)` (запись в целевой файл)
-  и `RotationManager` (таймер, `start`/`stop`/`rotateNow`).
+  и `RotationManager` (таймер, `start`/`stop`/`rotateNow`/`rotatePrevious`/`applyCurrentKey`).
 - `ClaudeRotate/ClaudeRotateApp.swift` — точка входа: `MenuBarExtra` (меню в трее)
   и окно настроек; автостарт ротации при запуске.
-- `ClaudeRotate/RootView.swift` — UI: вкладка «Keys» (CRUD/включение/порядок) и
-  вкладка «Settings» (путь к файлу, интервал, автостарт, статус).
-- `ClaudeRotate.xcodeproj/project.pbxproj` — настройки сборки.
+- `ClaudeRotate/RootView.swift` — UI: вкладка «Обзор» (`DashboardView`: карточка
+  текущего ключа, статус ротации с таймером и кнопкой Запустить/Остановить, карточки
+  предыдущего/следующего ключа, кнопки «Предыдущий»/«Следующий»), вкладка «Ключи»
+  (CRUD/включение/порядок) и вкладка «Настройки» (путь к файлу, интервал, автостарт,
+  язык интерфейса, статус). Все строки UI — через `store.tr(...)`.
+- `ClaudeRotate.xcodeproj/project.pbxproj` — настройки сборки (группа файлов
+  синхронизируется с ФС: новые `.swift`-файлы подхватываются автоматически).
 
 ## Сборка
 xcodebuild требует полный Xcode (не Command Line Tools), поэтому указываем

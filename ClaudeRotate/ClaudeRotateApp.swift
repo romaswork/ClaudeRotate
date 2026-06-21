@@ -24,8 +24,13 @@ struct ClaudeRotateApp: App {
                 .environmentObject(rotation)
                 .frame(minWidth: 480, minHeight: 360)
                 .onAppear {
+                    // Restore and immediately write the last active key from the
+                    // previous session, so the target file reflects it right away.
+                    let restored = rotation.applyCurrentKey()
                     if store.startOnLaunch && !store.isRunning {
-                        rotation.start()
+                        // If a key was restored, keep it for the first interval
+                        // instead of immediately advancing to the next one.
+                        rotation.start(immediate: !restored)
                     }
                 }
         }
@@ -57,11 +62,11 @@ struct MenuBarLabel: View {
     private var tooltip: String {
         if store.isRunning {
             if let name = store.currentKeyName {
-                return "Running · \(name)"
+                return store.tr("Запущена · \(name)", "Running · \(name)")
             }
-            return "Running"
+            return store.tr("Запущена", "Running")
         }
-        return "Paused"
+        return store.tr("На паузе", "Paused")
     }
 }
 
@@ -72,36 +77,37 @@ struct MenuBarContent: View {
 
     var body: some View {
         if let name = store.currentKeyName {
-            Text("Active: \(name)")
+            Text(store.tr("Активен: \(name)", "Active: \(name)"))
         } else {
-            Text("No active key")
+            Text(store.tr("Нет активного ключа", "No active key"))
         }
 
         if let last = store.lastRotation {
-            Text("Last: \(last.formatted(date: .omitted, time: .standard))")
+            Text(store.tr("Последняя: \(last.formatted(date: .omitted, time: .standard))",
+                          "Last: \(last.formatted(date: .omitted, time: .standard))"))
         }
 
         if let error = store.lastError {
-            Text("Error: \(error)")
+            Text(store.tr("Ошибка: \(error)", "Error: \(error)"))
         }
 
         Divider()
 
         if store.isRunning {
-            Button("Stop Rotation") { rotation.stop() }
+            Button(store.tr("Остановить ротацию", "Stop Rotation")) { rotation.stop() }
         } else {
-            Button("Start Rotation") { rotation.start() }
+            Button(store.tr("Запустить ротацию", "Start Rotation")) { rotation.start() }
         }
 
-        Button("Rotate Now") { rotation.rotateNow() }
+        Button(store.tr("Сменить сейчас", "Rotate Now")) { rotation.rotateNow() }
 
         Divider()
 
-        Button("Settings…") {
+        Button(store.tr("Настройки…", "Settings…")) {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
 
-        Button("Quit ClaudeRotate") { NSApp.terminate(nil) }
+        Button(store.tr("Выйти", "Quit ClaudeRotate")) { NSApp.terminate(nil) }
     }
 }

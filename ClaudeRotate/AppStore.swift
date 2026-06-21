@@ -17,6 +17,7 @@ final class AppStore: ObservableObject {
     @Published var filePath: String = ""
     @Published var intervalMinutes: Int = 30
     @Published var startOnLaunch: Bool = false
+    @Published var language: AppLanguage = .systemDefault
 
     // Transient runtime state (not persisted)
     @Published var isRunning: Bool = false
@@ -36,6 +37,8 @@ final class AppStore: ObservableObject {
         var filePath: String
         var intervalMinutes: Int
         var startOnLaunch: Bool
+        var currentKeyID: UUID?
+        var language: AppLanguage?
     }
 
     private static var configURL: URL {
@@ -67,6 +70,11 @@ final class AppStore: ObservableObject {
         filePath = config.filePath
         intervalMinutes = max(1, config.intervalMinutes)
         startOnLaunch = config.startOnLaunch
+        language = config.language ?? .systemDefault
+        // Restore the last active key only if it still exists.
+        if let id = config.currentKeyID, keys.contains(where: { $0.id == id }) {
+            currentKeyID = id
+        }
     }
 
     func save() {
@@ -74,7 +82,9 @@ final class AppStore: ObservableObject {
         let config = Config(keys: keys,
                             filePath: filePath,
                             intervalMinutes: intervalMinutes,
-                            startOnLaunch: startOnLaunch)
+                            startOnLaunch: startOnLaunch,
+                            currentKeyID: currentKeyID,
+                            language: language)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(config) else { return }
@@ -148,8 +158,23 @@ final class AppStore: ObservableObject {
         keys.filter { $0.enabled }
     }
 
-    var currentKeyName: String? {
+    // MARK: - Localization
+
+    /// Returns the string for the currently selected UI language. Reading
+    /// `language` here makes any view that calls `tr` re-render when it changes.
+    func tr(_ ru: String, _ en: String) -> String {
+        switch language {
+        case .russian: return ru
+        case .english: return en
+        }
+    }
+
+    var currentKey: APIKey? {
         guard let id = currentKeyID else { return nil }
-        return keys.first { $0.id == id }?.name
+        return keys.first { $0.id == id }
+    }
+
+    var currentKeyName: String? {
+        currentKey?.name
     }
 }
