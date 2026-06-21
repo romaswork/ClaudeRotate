@@ -9,6 +9,7 @@ import SwiftUI
 struct ClaudeRotateApp: App {
     @StateObject private var store: AppStore
     @StateObject private var rotation: RotationManager
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let store = AppStore()
@@ -29,13 +30,38 @@ struct ClaudeRotateApp: App {
                 }
         }
         .windowResizability(.contentMinSize)
+        .onChange(of: scenePhase) { _, phase in
+            // Safety net: flush any unsaved edits when the app is no longer active.
+            if phase != .active { store.save() }
+        }
 
-        MenuBarExtra("ClaudeRotate", systemImage: "key.fill") {
+        MenuBarExtra {
             MenuBarContent()
                 .environmentObject(store)
                 .environmentObject(rotation)
+        } label: {
+            MenuBarLabel(store: store)
         }
         .menuBarExtraStyle(.menu)
+    }
+}
+
+struct MenuBarLabel: View {
+    @ObservedObject var store: AppStore
+
+    var body: some View {
+        Image(systemName: store.isRunning ? "key.fill" : "pause.circle")
+            .help(tooltip)
+    }
+
+    private var tooltip: String {
+        if store.isRunning {
+            if let name = store.currentKeyName {
+                return "Running · \(name)"
+            }
+            return "Running"
+        }
+        return "Paused"
     }
 }
 

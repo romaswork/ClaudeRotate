@@ -9,17 +9,23 @@ import SwiftUI
 
 @MainActor
 final class AppStore: ObservableObject {
-    // Persisted configuration
-    @Published var keys: [APIKey] = [] { didSet { save() } }
-    @Published var filePath: String = "" { didSet { save() } }
-    @Published var intervalMinutes: Int = 30 { didSet { save() } }
-    @Published var startOnLaunch: Bool = false { didSet { save() } }
+    // Persisted configuration.
+    // NOTE: these are updated in-memory immediately by UI bindings, but are NOT
+    // written to disk on every change. Persistence happens explicitly via save()
+    // on focus change, discrete actions, the "Save" button, and app backgrounding.
+    @Published var keys: [APIKey] = []
+    @Published var filePath: String = ""
+    @Published var intervalMinutes: Int = 30
+    @Published var startOnLaunch: Bool = false
 
     // Transient runtime state (not persisted)
     @Published var isRunning: Bool = false
     @Published var currentKeyID: UUID?
     @Published var lastError: String?
     @Published var lastRotation: Date?
+
+    // Transient per-key validation results (not persisted)
+    @Published var testStates: [UUID: KeyTestState] = [:]
 
     private var isLoading = false
 
@@ -41,8 +47,13 @@ final class AppStore: ObservableObject {
         return dir.appendingPathComponent("config.json")
     }
 
+    static let defaultFilePath = "~/.claude/settings.json"
+
     init() {
         load()
+        if filePath.isEmpty {
+            filePath = Self.defaultFilePath
+        }
     }
 
     private func load() {
@@ -58,7 +69,7 @@ final class AppStore: ObservableObject {
         startOnLaunch = config.startOnLaunch
     }
 
-    private func save() {
+    func save() {
         guard !isLoading else { return }
         let config = Config(keys: keys,
                             filePath: filePath,
@@ -74,16 +85,24 @@ final class AppStore: ObservableObject {
 
     func addKey() {
         keys.append(APIKey(name: "New Key"))
+        save()
+    }
+
+    func add(_ key: APIKey) {
+        keys.append(key)
+        save()
     }
 
     func updateKey(_ key: APIKey) {
         guard let idx = keys.firstIndex(where: { $0.id == key.id }) else { return }
         keys[idx] = key
+        save()
     }
 
     func deleteKey(_ key: APIKey) {
         keys.removeAll { $0.id == key.id }
         if currentKeyID == key.id { currentKeyID = nil }
+        save()
     }
 
     func deleteKeys(at offsets: IndexSet) {
@@ -92,10 +111,37 @@ final class AppStore: ObservableObject {
         if let current = currentKeyID, removed.contains(current) {
             currentKeyID = nil
         }
+        save()
     }
 
     func move(from source: IndexSet, to destination: Int) {
         keys.move(fromOffsets: source, toOffset: destination)
+        save()
+    }
+
+    // MARK: - Key testing
+
+    func test(_ key: APIKey) {
+        let id = key.id
+        let api = key.apiKey
+        let base = key.baseURL
+        testStates[id] = .testing
+        Task { [weak self] in
+            let result = await testKey(apiKey: api, baseURL: base)
+            guard let self else { return }
+            switch result {
+            case .valid:
+                self.testStates[id] = .success
+            case .invalid(let code):
+                self.testStates[id] = .failure("HTTP \(code)")
+            case .error(let message):
+                self.testStates[id] = .failure(message)
+            }
+        }
+    }
+
+    func testAll() {
+        for key in keys { test(key) }
     }
 
     var enabledKeys: [APIKey] {

@@ -98,6 +98,20 @@ final class RotationManager: ObservableObject {
         if store.isRunning { start() }
     }
 
+    /// Writes a specific key to the target file immediately and marks it active.
+    /// Works regardless of whether rotation is running or paused; does not touch
+    /// the timer. If rotation is running, the next tick continues after this key.
+    func apply(_ key: APIKey) {
+        do {
+            try writeKey(key, toPath: store.filePath)
+            store.currentKeyID = key.id
+            store.lastRotation = Date()
+            store.lastError = nil
+        } catch {
+            store.lastError = error.localizedDescription
+        }
+    }
+
     /// Applies the next enabled key (wrapping around) to the target file.
     func rotateNow() {
         let enabled = store.enabledKeys
