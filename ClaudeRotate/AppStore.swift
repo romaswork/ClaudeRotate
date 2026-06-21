@@ -14,6 +14,7 @@ final class AppStore: ObservableObject {
     // written to disk on every change. Persistence happens explicitly via save()
     // on focus change, discrete actions, the "Save" button, and app backgrounding.
     @Published var keys: [APIKey] = []
+    @Published var proxies: [Proxy] = []
     @Published var filePath: String = ""
     @Published var intervalMinutes: Int = 30
     @Published var startOnLaunch: Bool = false
@@ -28,12 +29,16 @@ final class AppStore: ObservableObject {
     // Transient per-key validation results (not persisted)
     @Published var testStates: [UUID: KeyTestState] = [:]
 
+    // Transient per-proxy validation results (not persisted)
+    @Published var proxyTestStates: [UUID: ProxyTestState] = [:]
+
     private var isLoading = false
 
     // MARK: - Persistence
 
     private struct Config: Codable {
         var keys: [APIKey]
+        var proxies: [Proxy]?
         var filePath: String
         var intervalMinutes: Int
         var startOnLaunch: Bool
@@ -67,6 +72,7 @@ final class AppStore: ObservableObject {
             return
         }
         keys = config.keys
+        proxies = config.proxies ?? []
         filePath = config.filePath
         intervalMinutes = max(1, config.intervalMinutes)
         startOnLaunch = config.startOnLaunch
@@ -80,6 +86,7 @@ final class AppStore: ObservableObject {
     func save() {
         guard !isLoading else { return }
         let config = Config(keys: keys,
+                            proxies: proxies,
                             filePath: filePath,
                             intervalMinutes: intervalMinutes,
                             startOnLaunch: startOnLaunch,
@@ -129,6 +136,39 @@ final class AppStore: ObservableObject {
         save()
     }
 
+    // MARK: - Proxy CRUD
+
+    func addProxy() {
+        proxies.append(Proxy(name: "New Proxy"))
+        save()
+    }
+
+    func updateProxy(_ proxy: Proxy) {
+        guard let idx = proxies.firstIndex(where: { $0.id == proxy.id }) else { return }
+        proxies[idx] = proxy
+        save()
+    }
+
+    func deleteProxy(_ proxy: Proxy) {
+        proxies.removeAll { $0.id == proxy.id }
+        // Снимаем привязку этого прокси со всех ключей.
+        for idx in keys.indices where keys[idx].proxyID == proxy.id {
+            keys[idx].proxyID = nil
+        }
+        save()
+    }
+
+    func moveProxy(from source: IndexSet, to destination: Int) {
+        proxies.move(fromOffsets: source, toOffset: destination)
+        save()
+    }
+
+    /// Возвращает прокси, привязанный к ключу (если назначен и существует).
+    func proxy(for key: APIKey) -> Proxy? {
+        guard let id = key.proxyID else { return nil }
+        return proxies.first { $0.id == id }
+    }
+
     // MARK: - Key testing
 
     func test(_ key: APIKey) {
@@ -152,6 +192,31 @@ final class AppStore: ObservableObject {
 
     func testAll() {
         for key in keys { test(key) }
+    }
+
+    // MARK: - Proxy testing
+
+    func testProxy(_ proxy: Proxy) {
+        let id = proxy.id
+        proxyTestStates[id] = .testing
+        Task { [weak self] in
+            let result = await ClaudeRotate.testProxy(proxy)
+            guard let self else { return }
+            switch result {
+            case .ok(let check):
+                self.proxyTestStates[id] = .success(check)
+            case .authFailed:
+                self.proxyTestStates[id] = .failure(self.tr("Ошибка авторизации (407)", "Auth failed (407)"))
+            case .httpError(let code):
+                self.proxyTestStates[id] = .failure("HTTP \(code)")
+            case .error(let message):
+                self.proxyTestStates[id] = .failure(message)
+            }
+        }
+    }
+
+    func testAllProxies() {
+        for proxy in proxies { testProxy(proxy) }
     }
 
     var enabledKeys: [APIKey] {

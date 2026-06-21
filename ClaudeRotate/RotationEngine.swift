@@ -30,9 +30,13 @@ enum RotationError: LocalizedError {
 }
 
 /// Reads the target JSON file, mutates only `apiKeyHelper`,
-/// `env.ANTHROPIC_API_KEY` and `env.ANTHROPIC_BASE_URL`, then writes it back.
-/// All other keys and values are preserved.
-func writeKey(_ key: APIKey, toPath path: String) throws {
+/// `env.ANTHROPIC_API_KEY`, `env.ANTHROPIC_BASE_URL` and the proxy variables
+/// `env.HTTPS_PROXY`/`env.HTTP_PROXY`, then writes it back. All other keys and
+/// values are preserved.
+///
+/// If `proxy` is nil (or has no usable URL) the proxy variables are removed,
+/// so a key without an assigned proxy clears any previously written proxy.
+func writeKey(_ key: APIKey, proxy: Proxy?, toPath path: String) throws {
     let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { throw RotationError.noFilePath }
 
@@ -53,6 +57,13 @@ func writeKey(_ key: APIKey, toPath path: String) throws {
     var env = root["env"] as? [String: Any] ?? [:]
     env["ANTHROPIC_API_KEY"] = key.apiKey
     env["ANTHROPIC_BASE_URL"] = key.baseURL
+    if let proxyURL = proxy?.url {
+        env["HTTPS_PROXY"] = proxyURL
+        env["HTTP_PROXY"] = proxyURL
+    } else {
+        env.removeValue(forKey: "HTTPS_PROXY")
+        env.removeValue(forKey: "HTTP_PROXY")
+    }
     root["env"] = env
 
     let output = try JSONSerialization.data(withJSONObject: root,
@@ -117,7 +128,7 @@ final class RotationManager: ObservableObject {
     /// the timer. If rotation is running, the next tick continues after this key.
     func apply(_ key: APIKey) {
         do {
-            try writeKey(key, toPath: store.filePath)
+            try writeKey(key, proxy: store.proxy(for: key), toPath: store.filePath)
             store.currentKeyID = key.id
             store.lastRotation = Date()
             store.lastError = nil
@@ -156,7 +167,7 @@ final class RotationManager: ObservableObject {
         let key = enabled[index]
 
         do {
-            try writeKey(key, toPath: store.filePath)
+            try writeKey(key, proxy: store.proxy(for: key), toPath: store.filePath)
             store.currentKeyID = key.id
             store.lastRotation = Date()
             store.lastError = nil

@@ -9,17 +9,56 @@ import UniformTypeIdentifiers
 
 struct RootView: View {
     @EnvironmentObject private var store: AppStore
+    @State private var tab: Tab = .overview
+
+    enum Tab: Hashable { case overview, keys, proxies, settings }
 
     var body: some View {
-        TabView {
-            DashboardView()
-                .tabItem { Label(store.tr("Обзор", "Overview"), systemImage: "rectangle.on.rectangle") }
-            KeysView()
-                .tabItem { Label(store.tr("Ключи", "Keys"), systemImage: "key") }
-            SettingsView()
-                .tabItem { Label(store.tr("Настройки", "Settings"), systemImage: "gearshape") }
+        VStack(spacing: 0) {
+            tabBar
+            Divider()
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding()
+    }
+
+    // Кастомная панель вкладок: на macOS обычный TabView не показывает иконки
+    // из `.tabItem`, поэтому рисуем переключатель сами (иконка + подпись).
+    private var tabBar: some View {
+        HStack(spacing: 4) {
+            tabButton(.overview, store.tr("Обзор", "Overview"), "rectangle.on.rectangle")
+            tabButton(.keys, store.tr("Ключи", "Keys"), "key")
+            tabButton(.proxies, store.tr("Прокси", "Proxies"), "network")
+            tabButton(.settings, store.tr("Настройки", "Settings"), "gearshape")
+        }
+        .padding(8)
+    }
+
+    private func tabButton(_ value: Tab, _ title: String, _ icon: String) -> some View {
+        let selected = tab == value
+        return Button {
+            tab = value
+        } label: {
+            Label(title, systemImage: icon)
+                .font(.callout.weight(selected ? .semibold : .regular))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(selected ? Color.accentColor.opacity(0.18) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 8))
+                .foregroundStyle(selected ? Color.accentColor : Color.primary)
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch tab {
+        case .overview: DashboardView()
+        case .keys: KeysView()
+        case .proxies: ProxiesView()
+        case .settings: SettingsView()
+        }
     }
 }
 
@@ -154,6 +193,9 @@ struct DashboardView: View {
 
                 infoRow(icon: "lock.fill", label: masked(key.apiKey))
                 infoRow(icon: "link", label: key.baseURL.isEmpty ? store.tr("Base URL по умолчанию", "Default base URL") : key.baseURL)
+                if let proxy = store.proxy(for: key) {
+                    infoRow(icon: "network", label: proxy.displayName)
+                }
                 if let last = store.lastRotation {
                     infoRow(icon: "clock.arrow.circlepath",
                             label: store.tr("Применён в \(last.formatted(date: .omitted, time: .standard))",
@@ -386,9 +428,6 @@ struct KeysView: View {
                     store.save()
                 }
                 .tag(key.id)
-                .contentShape(Rectangle())
-                // Use a simultaneous gesture so double-click-to-edit doesn't
-                // swallow the List's drag-to-reorder gesture.
                 .simultaneousGesture(TapGesture(count: 2).onEnded { presentEdit(key) })
                 .contextMenu {
                     Button(store.tr("Проверить", "Test")) { store.test(key) }
@@ -489,6 +528,10 @@ struct KeyRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            Image(systemName: "line.3.horizontal")
+                .font(.body)
+                .foregroundStyle(.tertiary)
+                .help(store.tr("Перетащите, чтобы изменить порядок", "Drag to reorder"))
             statusDot
             VStack(alignment: .leading, spacing: 2) {
                 Text(key.name.isEmpty ? store.tr("Без названия", "Untitled") : key.name)
@@ -614,6 +657,20 @@ struct KeyEditor: View {
                 }
 
                 Section {
+                    Picker(store.tr("Прокси", "Proxy"), selection: $draft.proxyID) {
+                        Text(store.tr("Без прокси", "No proxy")).tag(UUID?.none)
+                        ForEach(store.proxies) { proxy in
+                            Text(proxy.displayName).tag(UUID?.some(proxy.id))
+                        }
+                    }
+                } header: {
+                    Text(store.tr("Прокси", "Proxy"))
+                } footer: {
+                    Text(store.tr("Если назначен, его URL пишется в HTTPS_PROXY / HTTP_PROXY при ротации этого ключа.",
+                                  "If assigned, its URL is written to HTTPS_PROXY / HTTP_PROXY when this key is rotated in."))
+                }
+
+                Section {
                     Toggle(store.tr("Участвует в ротации", "Include in rotation"), isOn: $draft.enabled)
                 }
             }
@@ -676,7 +733,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section(store.tr("Целевой файл", "Target File")) {
+            Section {
                 HStack {
                     TextField("~/.claude/settings.json", text: $store.filePath)
                         .textFieldStyle(.roundedBorder)
@@ -687,9 +744,11 @@ struct SettingsView: View {
                         .onSubmit { store.save() }
                     Button(store.tr("Обзор…", "Browse…")) { browse() }
                 }
+            } header: {
+                Label(store.tr("Целевой файл", "Target File"), systemImage: "doc.text")
             }
 
-            Section(store.tr("Ротация", "Rotation")) {
+            Section {
                 HStack {
                     Text(store.tr("Интервал (минуты)", "Interval (minutes)"))
                     Spacer()
@@ -709,45 +768,19 @@ struct SettingsView: View {
                 Toggle(store.tr("Запускать ротацию при старте", "Start rotation on launch"),
                        isOn: $store.startOnLaunch)
                     .onChange(of: store.startOnLaunch) { _, _ in store.save() }
+            } header: {
+                Label(store.tr("Ротация", "Rotation"), systemImage: "arrow.triangle.2.circlepath")
             }
 
-            Section(store.tr("Интерфейс", "Interface")) {
+            Section {
                 Picker(store.tr("Язык", "Language"), selection: $store.language) {
                     ForEach(AppLanguage.allCases) { lang in
                         Text(lang.displayName).tag(lang)
                     }
                 }
                 .onChange(of: store.language) { _, _ in store.save() }
-            }
-
-            Section(store.tr("Статус", "Status")) {
-                LabeledContent(store.tr("Состояние", "State")) {
-                    Text(store.isRunning ? store.tr("Запущена", "Running")
-                                         : store.tr("Остановлена", "Stopped"))
-                        .foregroundStyle(store.isRunning ? .green : .secondary)
-                }
-                LabeledContent(store.tr("Активный ключ", "Active key")) {
-                    Text(store.currentKeyName ?? "—")
-                }
-                if let last = store.lastRotation {
-                    LabeledContent(store.tr("Последняя смена", "Last rotation")) {
-                        Text(last.formatted(date: .abbreviated, time: .standard))
-                    }
-                }
-                if let error = store.lastError {
-                    LabeledContent(store.tr("Ошибка", "Error")) {
-                        Text(error).foregroundStyle(.red)
-                    }
-                }
-
-                HStack {
-                    if store.isRunning {
-                        Button(store.tr("Остановить", "Stop")) { rotation.stop() }
-                    } else {
-                        Button(store.tr("Запустить", "Start")) { rotation.start() }
-                    }
-                    Button(store.tr("Сменить сейчас", "Rotate Now")) { rotation.rotateNow() }
-                }
+            } header: {
+                Label(store.tr("Интерфейс", "Interface"), systemImage: "globe")
             }
         }
         .formStyle(.grouped)
@@ -763,5 +796,406 @@ struct SettingsView: View {
             store.filePath = url.path
             store.save()
         }
+    }
+}
+
+// MARK: - Proxies
+
+struct ProxiesView: View {
+    @EnvironmentObject private var store: AppStore
+
+    @State private var editorProxy: Proxy?
+    @State private var editorIsNew = false
+    @State private var selection: Proxy.ID?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if store.proxies.isEmpty {
+                emptyState
+            } else {
+                proxyList
+            }
+            Divider()
+            bottomBar
+        }
+        .sheet(item: $editorProxy) { proxy in
+            ProxyEditor(proxy: proxy, isNew: editorIsNew) { edited in
+                if editorIsNew {
+                    store.proxies.append(edited)
+                    store.save()
+                } else {
+                    store.updateProxy(edited)
+                }
+            }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "network")
+                .font(.system(size: 44))
+                .foregroundStyle(.secondary)
+            Text(store.tr("Нет прокси", "No Proxies"))
+                .font(.title3.weight(.semibold))
+            Text(store.tr("Добавьте прокси, чтобы привязывать его к ключам.",
+                          "Add a proxy to assign it to your keys."))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Button {
+                presentNew()
+            } label: {
+                Label(store.tr("Добавить прокси", "Add Proxy"), systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var proxyList: some View {
+        List(selection: $selection) {
+            ForEach($store.proxies) { $proxy in
+                ProxyRow(proxy: $proxy,
+                         usageCount: usageCount(of: proxy.id),
+                         testState: store.proxyTestStates[proxy.id])
+                    .tag(proxy.id)
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { presentEdit(proxy) })
+                    .contextMenu {
+                        Button(store.tr("Проверить", "Test")) { store.testProxy(proxy) }
+                        Divider()
+                        Button(store.tr("Изменить", "Edit")) { presentEdit(proxy) }
+                        Button(store.tr("Удалить", "Delete"), role: .destructive) { store.deleteProxy(proxy) }
+                    }
+            }
+            .onMove { store.moveProxy(from: $0, to: $1) }
+        }
+        .listStyle(.inset(alternatesRowBackgrounds: true))
+    }
+
+    private var bottomBar: some View {
+        HStack(spacing: 0) {
+            Button {
+                presentNew()
+            } label: {
+                Image(systemName: "plus")
+                    .frame(width: 24, height: 22)
+            }
+            .help(store.tr("Добавить прокси", "Add proxy"))
+
+            Button {
+                if let id = selection, let proxy = store.proxies.first(where: { $0.id == id }) {
+                    store.deleteProxy(proxy)
+                    selection = nil
+                }
+            } label: {
+                Image(systemName: "minus")
+                    .frame(width: 24, height: 22)
+            }
+            .help(store.tr("Удалить выбранный прокси", "Remove selected proxy"))
+            .disabled(selection == nil)
+
+            Divider().frame(height: 16)
+
+            Button {
+                if let id = selection, let proxy = store.proxies.first(where: { $0.id == id }) {
+                    presentEdit(proxy)
+                }
+            } label: {
+                Image(systemName: "pencil")
+                    .frame(width: 24, height: 22)
+            }
+            .help(store.tr("Изменить выбранный прокси", "Edit selected proxy"))
+            .disabled(selection == nil)
+
+            Button {
+                if let id = selection, let proxy = store.proxies.first(where: { $0.id == id }) {
+                    store.testProxy(proxy)
+                }
+            } label: {
+                Image(systemName: "checkmark.shield")
+                    .frame(width: 24, height: 22)
+            }
+            .help(store.tr("Проверить выбранный прокси", "Test selected proxy"))
+            .disabled(selection == nil)
+
+            Divider().frame(height: 16)
+
+            Button {
+                store.testAllProxies()
+            } label: {
+                Image(systemName: "checkmark.shield.fill")
+                    .frame(width: 24, height: 22)
+            }
+            .help(store.tr("Проверить все прокси", "Test all proxies"))
+            .disabled(store.proxies.isEmpty)
+
+            Spacer()
+        }
+        .buttonStyle(.borderless)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+    }
+
+    private func usageCount(of id: UUID) -> Int {
+        store.keys.filter { $0.proxyID == id }.count
+    }
+
+    private func presentNew() {
+        editorIsNew = true
+        editorProxy = Proxy()
+    }
+
+    private func presentEdit(_ proxy: Proxy) {
+        editorIsNew = false
+        editorProxy = proxy
+    }
+}
+
+struct ProxyRow: View {
+    @EnvironmentObject private var store: AppStore
+    @Binding var proxy: Proxy
+    let usageCount: Int
+    let testState: ProxyTestState?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "line.3.horizontal")
+                .font(.body)
+                .foregroundStyle(.tertiary)
+                .help(store.tr("Перетащите, чтобы изменить порядок", "Drag to reorder"))
+            Image(systemName: "network")
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(proxy.name.isEmpty ? store.tr("Без названия", "Untitled") : proxy.name)
+                    .fontWeight(.medium)
+                Text(endpoint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            testIndicator
+            if !proxy.username.trimmingCharacters(in: .whitespaces).isEmpty {
+                Image(systemName: "lock.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .help(store.tr("С авторизацией", "With authentication"))
+            }
+            if usageCount > 0 {
+                Text(store.tr("\(usageCount) ключ.", "\(usageCount) key(s)"))
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(.secondary.opacity(0.15), in: Capsule())
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var endpoint: String {
+        let h = proxy.host.trimmingCharacters(in: .whitespaces)
+        let p = proxy.port.trimmingCharacters(in: .whitespaces)
+        if h.isEmpty { return store.tr("Не задан хост", "No host") }
+        return p.isEmpty ? h : "\(h):\(p)"
+    }
+
+    @ViewBuilder
+    private var testIndicator: some View {
+        switch testState {
+        case .testing:
+            ProgressView()
+                .controlSize(.small)
+        case .success(let check):
+            HStack(spacing: 6) {
+                if let flag = check.flag {
+                    Text(flag)
+                        .help(check.countryName ?? check.countryCode ?? "")
+                }
+                Text("\(check.latencyMs) ms")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(latencyColor(check.latencyMs))
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .help(store.tr("Доступен", "Reachable"))
+            }
+        case .failure(let message):
+            Image(systemName: "xmark.octagon.fill")
+                .foregroundStyle(.red)
+                .help(message)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private func latencyColor(_ ms: Int) -> Color {
+        switch ms {
+        case ..<300: return .green
+        case ..<800: return .orange
+        default: return .red
+        }
+    }
+}
+
+// MARK: - Proxy Editor
+
+struct ProxyEditor: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var draft: Proxy
+    @State private var testState: ProxyTestState?
+    let isNew: Bool
+    let onSave: (Proxy) -> Void
+
+    init(proxy: Proxy, isNew: Bool, onSave: @escaping (Proxy) -> Void) {
+        _draft = State(initialValue: proxy)
+        self.isNew = isNew
+        self.onSave = onSave
+    }
+
+    private var isValid: Bool {
+        !draft.name.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !draft.host.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private var canTest: Bool {
+        !draft.host.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func runTest() {
+        testState = .testing
+        let proxy = draft
+        Task {
+            let result = await testProxy(proxy)
+            switch result {
+            case .ok(let check): testState = .success(check)
+            case .authFailed:
+                testState = .failure(store.tr("Ошибка авторизации (407)", "Auth failed (407)"))
+            case .httpError(let code): testState = .failure("HTTP \(code)")
+            case .error(let message): testState = .failure(message)
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(isNew ? store.tr("Новый прокси", "New Proxy") : store.tr("Изменить прокси", "Edit Proxy"))
+                .font(.headline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding([.horizontal, .top])
+                .padding(.bottom, 8)
+
+            Form {
+                Section {
+                    TextField(store.tr("Название", "Name"), text: $draft.name,
+                              prompt: Text(store.tr("напр. Домашний", "e.g. Home")))
+                } footer: {
+                    Text(store.tr("Метка для распознавания прокси.",
+                                  "A label to recognize this proxy."))
+                }
+
+                Section {
+                    TextField(store.tr("Хост", "Host"), text: $draft.host,
+                              prompt: Text("127.0.0.1"))
+                        .font(.system(.body, design: .monospaced))
+                    TextField(store.tr("Порт", "Port"), text: $draft.port,
+                              prompt: Text("8080"))
+                        .font(.system(.body, design: .monospaced))
+                } header: {
+                    Text(store.tr("Адрес", "Endpoint"))
+                }
+
+                Section {
+                    TextField(store.tr("Логин", "Username"), text: $draft.username)
+                    SecureField(store.tr("Пароль", "Password"), text: $draft.password)
+                } header: {
+                    Text(store.tr("Авторизация (необязательно)", "Authentication (optional)"))
+                } footer: {
+                    Text(store.tr("Оставьте пустым для прокси без авторизации.",
+                                  "Leave empty for a proxy without authentication."))
+                }
+
+                if let url = draft.url {
+                    Section {
+                        Text(maskedURL(url))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    } header: {
+                        Text(store.tr("Итоговый URL", "Resulting URL"))
+                    }
+                }
+            }
+            .formStyle(.grouped)
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Button(store.tr("Проверить", "Test")) { runTest() }
+                    .disabled(!canTest)
+                testStatusView
+                Spacer()
+                Button(store.tr("Отмена", "Cancel"), role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(store.tr("Сохранить", "Save")) {
+                    onSave(draft)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(!isValid)
+            }
+            .padding()
+        }
+        .frame(width: 440, height: 470)
+    }
+
+    @ViewBuilder
+    private var testStatusView: some View {
+        switch testState {
+        case .testing:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(store.tr("Проверка…", "Testing…")).foregroundStyle(.secondary)
+            }
+            .font(.callout)
+        case .success(let check):
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text(successSummary(check))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .font(.callout)
+        case .failure(let message):
+            Label(message, systemImage: "xmark.octagon.fill")
+                .foregroundStyle(.red)
+                .font(.callout)
+                .lineLimit(1)
+                .help(message)
+        case nil:
+            EmptyView()
+        }
+    }
+
+    private func successSummary(_ check: ProxyCheck) -> String {
+        var parts: [String] = [store.tr("Доступен", "Reachable"), "\(check.latencyMs) \(store.tr("мс", "ms"))"]
+        let country = [check.flag, check.countryName ?? check.countryCode]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        if !country.isEmpty { parts.append(country) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Маскирует пароль в превью URL, чтобы он не отображался открытым текстом.
+    private func maskedURL(_ url: String) -> String {
+        let pass = draft.password.trimmingCharacters(in: .whitespaces)
+        guard !pass.isEmpty,
+              let encPass = pass.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) else {
+            return url
+        }
+        return url.replacingOccurrences(of: ":\(encPass)@", with: ":••••@")
     }
 }
