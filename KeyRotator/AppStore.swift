@@ -258,7 +258,7 @@ final class AppStore: ObservableObject {
         let id = proxy.id
         proxyTestStates[id] = .testing
         Task { [weak self] in
-            let result = await ClaudeRotate.testProxy(proxy)
+            let result = await KeyRotator.testProxy(proxy)
             guard let self else { return }
             switch result {
             case .ok(let check):

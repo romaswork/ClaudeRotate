@@ -1,12 +1,12 @@
 //
-//  ClaudeRotateApp.swift
-//  ClaudeRotate
+//  KeyRotatorApp.swift
+//  KeyRotator
 //
 
 import SwiftUI
 
 @main
-struct ClaudeRotateApp: App {
+struct KeyRotatorApp: App {
     @StateObject private var store: AppStore
     @StateObject private var rotation: RotationManager
     @Environment(\.scenePhase) private var scenePhase

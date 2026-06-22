@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		840CA8662FE7D31D00FF9730 /* ClaudeRotate.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClaudeRotate.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		840CA8662FE7D31D00FF9730 /* KeyRotator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KeyRotator.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		840CA8682FE7D31D00FF9730 /* ClaudeRotate */ = {
+		840CA8682FE7D31D00FF9730 /* KeyRotator */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = ClaudeRotate;
+			path = KeyRotator;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		840CA85D2FE7D31D00FF9730 = {
 			isa = PBXGroup;
 			children = (
-				840CA8682FE7D31D00FF9730 /* ClaudeRotate */,
+				840CA8682FE7D31D00FF9730 /* KeyRotator */,
 				840CA8672FE7D31D00FF9730 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		840CA8672FE7D31D00FF9730 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				840CA8662FE7D31D00FF9730 /* ClaudeRotate.app */,
+				840CA8662FE7D31D00FF9730 /* KeyRotator.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		840CA8652FE7D31D00FF9730 /* ClaudeRotate */ = {
+		840CA8652FE7D31D00FF9730 /* KeyRotator */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 840CA8732FE7D31E00FF9730 /* Build configuration list for PBXNativeTarget "ClaudeRotate" */;
+			buildConfigurationList = 840CA8732FE7D31E00FF9730 /* Build configuration list for PBXNativeTarget "KeyRotator" */;
 			buildPhases = (
 				840CA8622FE7D31D00FF9730 /* Sources */,
 				840CA8632FE7D31D00FF9730 /* Frameworks */,
@@ -61,13 +61,13 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				840CA8682FE7D31D00FF9730 /* ClaudeRotate */,
+				840CA8682FE7D31D00FF9730 /* KeyRotator */,
 			);
-			name = ClaudeRotate;
+			name = KeyRotator;
 			packageProductDependencies = (
 			);
-			productName = ClaudeRotate;
-			productReference = 840CA8662FE7D31D00FF9730 /* ClaudeRotate.app */;
+			productName = KeyRotator;
+			productReference = 840CA8662FE7D31D00FF9730 /* KeyRotator.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -99,7 +99,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				840CA8652FE7D31D00FF9730 /* ClaudeRotate */,
+				840CA8652FE7D31D00FF9730 /* KeyRotator */,
 			);
 		};
 /* End PBXProject section */
@@ -250,7 +250,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = ClaudeRotate/ClaudeRotate.entitlements;
+				CODE_SIGN_ENTITLEMENTS = KeyRotator/KeyRotator.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -284,7 +284,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = ClaudeRotate/ClaudeRotate.entitlements;
+				CODE_SIGN_ENTITLEMENTS = KeyRotator/KeyRotator.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -325,7 +325,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		840CA8732FE7D31E00FF9730 /* Build configuration list for PBXNativeTarget "ClaudeRotate" */ = {
+		840CA8732FE7D31E00FF9730 /* Build configuration list for PBXNativeTarget "KeyRotator" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				840CA8742FE7D31E00FF9730 /* Debug */,
