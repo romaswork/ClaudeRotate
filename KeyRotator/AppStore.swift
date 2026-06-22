@@ -281,6 +281,72 @@ final class AppStore: ObservableObject {
         keys.filter { $0.enabled }
     }
 
+    // MARK: - Import / Export / Reset
+
+    /// Переносимое подмножество конфигурации для экспорта/импорта. Исключает
+    /// security-scoped bookmark и путь к целевому файлу: доступ к файлу
+    /// специфичен для конкретной машины/пользователя и не переносится.
+    private struct ExportData: Codable {
+        var keys: [APIKey]
+        var proxies: [Proxy]
+        var intervalMinutes: Int
+        var startOnLaunch: Bool
+        var language: AppLanguage?
+    }
+
+    /// Сериализует текущие настройки (ключи, прокси, интервал, автозапуск, язык)
+    /// в pretty-printed JSON для сохранения в файл.
+    func exportData() -> Data? {
+        let export = ExportData(keys: keys,
+                                proxies: proxies,
+                                intervalMinutes: intervalMinutes,
+                                startOnLaunch: startOnLaunch,
+                                language: language)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try? encoder.encode(export)
+    }
+
+    /// Заменяет текущие настройки данными из `data`. Привязка к целевому файлу
+    /// (bookmark) не затрагивается. Возвращает `true` при успехе.
+    @discardableResult
+    func importData(_ data: Data) -> Bool {
+        guard let imported = try? JSONDecoder().decode(ExportData.self, from: data) else {
+            lastError = tr("Не удалось прочитать файл настроек", "Couldn't read the settings file")
+            return false
+        }
+        keys = imported.keys
+        proxies = imported.proxies
+        intervalMinutes = max(1, imported.intervalMinutes)
+        startOnLaunch = imported.startOnLaunch
+        language = imported.language ?? .systemDefault
+        // Сбрасываем рантайм-состояние, которое могло устареть.
+        currentKeyID = nil
+        testStates = [:]
+        proxyTestStates = [:]
+        lastError = nil
+        save()
+        return true
+    }
+
+    /// Очищает все ключи, прокси и настройки до значений по умолчанию и забывает
+    /// выбранный целевой файл. Сам файл settings.json пользователя не трогается.
+    func resetAll() {
+        keys = []
+        proxies = []
+        intervalMinutes = 30
+        startOnLaunch = false
+        language = .systemDefault
+        fileBookmark = nil
+        filePath = ""
+        currentKeyID = nil
+        testStates = [:]
+        proxyTestStates = [:]
+        lastError = nil
+        lastRotation = nil
+        save()
+    }
+
     // MARK: - Localization
 
     /// Returns the string for the currently selected UI language. Reading

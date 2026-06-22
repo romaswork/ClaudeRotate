@@ -758,6 +758,8 @@ struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var rotation: RotationManager
 
+    @State private var showResetConfirm = false
+
     var body: some View {
         Form {
             Section {
@@ -823,8 +825,76 @@ struct SettingsView: View {
             } header: {
                 Label(store.tr("Интерфейс", "Interface"), systemImage: "globe")
             }
+
+            Section {
+                HStack(spacing: 10) {
+                    Button {
+                        exportSettings()
+                    } label: {
+                        Label(store.tr("Экспорт…", "Export…"), systemImage: "square.and.arrow.up")
+                    }
+                    Button {
+                        importSettings()
+                    } label: {
+                        Label(store.tr("Импорт…", "Import…"), systemImage: "square.and.arrow.down")
+                    }
+                    Spacer()
+                    Button(role: .destructive) {
+                        showResetConfirm = true
+                    } label: {
+                        Label(store.tr("Сбросить всё…", "Reset all…"), systemImage: "trash")
+                    }
+                }
+            } header: {
+                Label(store.tr("Данные", "Data"), systemImage: "externaldrive")
+            } footer: {
+                Text(store.tr("Экспорт сохраняет ключи, прокси и настройки в файл. Выбранный целевой файл не переносится. Сброс удаляет все ключи, прокси и настройки (сам settings.json не трогается).",
+                              "Export saves keys, proxies and settings to a file. The selected target file is not included. Reset removes all keys, proxies and settings (your settings.json is left untouched)."))
+            }
         }
         .formStyle(.grouped)
+        .alert(store.tr("Сбросить все настройки?", "Reset all settings?"), isPresented: $showResetConfirm) {
+            Button(store.tr("Отмена", "Cancel"), role: .cancel) { }
+            Button(store.tr("Сбросить", "Reset"), role: .destructive) {
+                rotation.stop()
+                store.resetAll()
+            }
+        } message: {
+            Text(store.tr("Все ключи, прокси и настройки будут удалены без возможности восстановления. Целевой файл settings.json не изменится.",
+                          "All keys, proxies and settings will be permanently deleted. Your target settings.json won't be changed."))
+        }
+    }
+
+    private func exportSettings() {
+        guard let data = store.exportData() else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "ClaudeRotate-settings.json"
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                try data.write(to: url)
+            } catch {
+                store.lastError = error.localizedDescription
+            }
+        }
+    }
+
+    private func importSettings() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json]
+        if panel.runModal() == .OK, let url = panel.url {
+            do {
+                let data = try Data(contentsOf: url)
+                rotation.stop()
+                store.importData(data)
+            } catch {
+                store.lastError = error.localizedDescription
+            }
+        }
     }
 
     /// Real home directory of the current user. Under App Sandbox `~` /
