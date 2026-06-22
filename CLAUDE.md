@@ -99,7 +99,10 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 
 ## Технические детали
 - macOS deployment target: 26.5, Swift 5.0, изоляция по умолчанию — MainActor.
-- Bundle ID: `xyz.ClaudeRotate`.
+- Bundle ID: `com.romas.clauderotatekey`. Внутренний таргет/папка проекта —
+  `ClaudeRotate`, но отображаемое имя приложения (`CFBundleDisplayName`) и название
+  в App Store — **KeyRotator** (нейтральное, без товарного знака «Claude»;
+  совместимость с Claude Code указывается только в подзаголовке/описании).
 - `RotationManager` объявляет `nonisolated let objectWillChange`, т.к. не имеет
   собственных `@Published`-свойств (UI читает состояние из `AppStore`).
 - Язык общения с пользователем в этом проекте — русский.

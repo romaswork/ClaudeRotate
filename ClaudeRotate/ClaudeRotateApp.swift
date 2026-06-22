@@ -18,7 +18,7 @@ struct ClaudeRotateApp: App {
     }
 
     var body: some Scene {
-        Window("ClaudeRotate", id: "main") {
+        Window("KeyRotator", id: "main") {
             RootView()
                 .environmentObject(store)
                 .environmentObject(rotation)
@@ -108,6 +108,6 @@ struct MenuBarContent: View {
             NSApp.activate(ignoringOtherApps: true)
         }
 
-        Button(store.tr("Выйти", "Quit ClaudeRotate")) { NSApp.terminate(nil) }
+        Button(store.tr("Выйти", "Quit KeyRotator")) { NSApp.terminate(nil) }
     }
 }

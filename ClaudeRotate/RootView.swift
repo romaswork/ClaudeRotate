@@ -99,6 +99,9 @@ struct DashboardView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
+                if !store.hasTargetFile {
+                    noFileBanner
+                }
                 statusBanner
                 currentKeyCard
                 HStack(spacing: 14) {
@@ -112,6 +115,32 @@ struct DashboardView: View {
             }
             .padding(18)
         }
+    }
+
+    // MARK: No-file banner
+
+    // Shown when no target file is selected. Under App Sandbox the file must be
+    // picked manually (e.g. after upgrading from a non-sandboxed version), so make
+    // the requirement obvious right on the dashboard.
+    private var noFileBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title2)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.tr("Целевой файл не выбран", "No target file selected"))
+                    .font(.headline)
+                Text(store.tr("Откройте «Настройки» и выберите файл settings.json — без него ротация не сможет записывать ключи.",
+                              "Open Settings and choose your settings.json — rotation can't write keys without it."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
     }
 
     // MARK: Status banner
@@ -749,8 +778,15 @@ struct SettingsView: View {
             } header: {
                 Label(store.tr("Целевой файл", "Target File"), systemImage: "doc.text")
             } footer: {
-                Text(store.tr("Выберите файл settings.json. Доступ к нему сохраняется между запусками.",
-                              "Pick your settings.json. Access to it is preserved across launches."))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(store.tr("Выберите файл settings.json. Доступ к нему сохраняется между запусками.",
+                                  "Pick your settings.json. Access to it is preserved across launches."))
+                    Text(store.tr("Обычно файл настроек Claude Code лежит здесь: \(defaultSettingsURL.path)",
+                                  "Claude Code usually keeps its settings here: \(defaultSettingsURL.path)"))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
 
             Section {
@@ -791,12 +827,38 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
+    /// Real home directory of the current user. Under App Sandbox `~` /
+    /// `NSHomeDirectory()` point inside the app container, so resolve the actual
+    /// home via the password database instead.
+    private var realHomeDirectory: URL {
+        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: dir))
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    /// Typical location of the Claude Code settings file for the current user.
+    private var defaultSettingsURL: URL {
+        realHomeDirectory.appendingPathComponent(".claude/settings.json")
+    }
+
     private func browse() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.json]
+        // `.claude` is a hidden folder — make it visible and pre-navigate the panel
+        // to the default settings file so the user only has to confirm. The sandbox
+        // still requires this explicit confirmation to grant access.
+        panel.showsHiddenFiles = true
+        let def = defaultSettingsURL
+        if FileManager.default.fileExists(atPath: def.path) {
+            panel.directoryURL = def.deletingLastPathComponent()
+            panel.nameFieldStringValue = def.lastPathComponent
+        } else {
+            panel.directoryURL = realHomeDirectory
+        }
         if panel.runModal() == .OK, let url = panel.url {
             store.setTargetFile(url)
         }
