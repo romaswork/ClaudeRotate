@@ -572,6 +572,9 @@ struct KeyRow: View {
                     .truncationMode(.middle)
             }
             Spacer()
+            if let proxy = store.assignedProxy(for: key) {
+                proxyChip(proxy)
+            }
             testIndicator
             if isActive {
                 Text(store.tr("Активен", "Active"))
@@ -594,6 +597,24 @@ struct KeyRow: View {
         Circle()
             .fill(isActive ? Color.green : (key.enabled ? Color.secondary : Color.secondary.opacity(0.3)))
             .frame(width: 8, height: 8)
+    }
+
+    // Бейдж с названием привязанного прокси. Когда прокси отключены глобально,
+    // показывается приглушённо с подсказкой, что он не применяется.
+    private func proxyChip(_ proxy: Proxy) -> some View {
+        let active = store.proxiesEnabled
+        return Label(proxy.displayName, systemImage: "network")
+            .labelStyle(.titleAndIcon)
+            .font(.caption2.weight(.medium))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .foregroundStyle(active ? Color.secondary : Color.secondary.opacity(0.5))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(.secondary.opacity(active ? 0.15 : 0.08), in: Capsule())
+            .help(active
+                  ? store.tr("Прокси: \(proxy.displayName)", "Proxy: \(proxy.displayName)")
+                  : store.tr("Прокси отключены глобально в настройках", "Proxies are disabled globally in Settings"))
     }
 
     @ViewBuilder
@@ -813,6 +834,24 @@ struct SettingsView: View {
                     .onChange(of: store.startOnLaunch) { _, _ in store.save() }
             } header: {
                 Label(store.tr("Ротация", "Rotation"), systemImage: "arrow.triangle.2.circlepath")
+            }
+
+            Section {
+                Toggle(store.tr("Использовать прокси", "Use proxies"),
+                       isOn: $store.proxiesEnabled)
+                    .onChange(of: store.proxiesEnabled) { _, _ in
+                        store.save()
+                        // Перезаписываем текущий ключ, чтобы переменные прокси в
+                        // целевом файле сразу отразили новое состояние.
+                        if let key = store.currentKey {
+                            rotation.apply(key)
+                        }
+                    }
+            } header: {
+                Label(store.tr("Прокси", "Proxies"), systemImage: "network")
+            } footer: {
+                Text(store.tr("Глобально включает или выключает применение прокси при ротации. Привязки прокси к ключам сохраняются. Когда выключено, переменные HTTPS_PROXY/HTTP_PROXY удаляются из целевого файла.",
+                              "Globally enables or disables proxy usage during rotation. Per-key proxy assignments are kept. When off, HTTPS_PROXY/HTTP_PROXY are removed from the target file."))
             }
 
             Section {

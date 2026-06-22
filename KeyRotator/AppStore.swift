@@ -15,6 +15,10 @@ final class AppStore: ObservableObject {
     // on focus change, discrete actions, the "Save" button, and app backgrounding.
     @Published var keys: [APIKey] = []
     @Published var proxies: [Proxy] = []
+    // Глобальный переключатель прокси. Когда выключен, ротация игнорирует прокси,
+    // привязанные к ключам (переменные HTTPS_PROXY/HTTP_PROXY удаляются из файла),
+    // но сами привязки ключей сохраняются.
+    @Published var proxiesEnabled: Bool = true
     // Display-only path of the selected target file (resolved from the bookmark).
     // Under App Sandbox actual file access goes through `fileBookmark`, NOT this.
     @Published var filePath: String = ""
@@ -46,6 +50,7 @@ final class AppStore: ObservableObject {
     private struct Config: Codable {
         var keys: [APIKey]
         var proxies: [Proxy]?
+        var proxiesEnabled: Bool?
         var filePath: String
         var fileBookmark: Data?
         var intervalMinutes: Int
@@ -76,6 +81,7 @@ final class AppStore: ObservableObject {
         }
         keys = config.keys
         proxies = config.proxies ?? []
+        proxiesEnabled = config.proxiesEnabled ?? true
         filePath = config.filePath
         fileBookmark = config.fileBookmark
         intervalMinutes = max(1, config.intervalMinutes)
@@ -91,6 +97,7 @@ final class AppStore: ObservableObject {
         guard !isLoading else { return }
         let config = Config(keys: keys,
                             proxies: proxies,
+                            proxiesEnabled: proxiesEnabled,
                             filePath: filePath,
                             fileBookmark: fileBookmark,
                             intervalMinutes: intervalMinutes,
@@ -221,8 +228,17 @@ final class AppStore: ObservableObject {
         save()
     }
 
-    /// Возвращает прокси, привязанный к ключу (если назначен и существует).
+    /// Прокси, который будет применён к ключу при ротации: учитывает глобальный
+    /// переключатель `proxiesEnabled`. Возвращает nil, если прокси отключены
+    /// глобально, не назначены или больше не существуют.
     func proxy(for key: APIKey) -> Proxy? {
+        guard proxiesEnabled else { return nil }
+        return assignedProxy(for: key)
+    }
+
+    /// Прокси, привязанный к ключу, независимо от глобального переключателя
+    /// (для отображения привязки в списке ключей).
+    func assignedProxy(for key: APIKey) -> Proxy? {
         guard let id = key.proxyID else { return nil }
         return proxies.first { $0.id == id }
     }
@@ -289,6 +305,7 @@ final class AppStore: ObservableObject {
     private struct ExportData: Codable {
         var keys: [APIKey]
         var proxies: [Proxy]
+        var proxiesEnabled: Bool?
         var intervalMinutes: Int
         var startOnLaunch: Bool
         var language: AppLanguage?
@@ -299,6 +316,7 @@ final class AppStore: ObservableObject {
     func exportData() -> Data? {
         let export = ExportData(keys: keys,
                                 proxies: proxies,
+                                proxiesEnabled: proxiesEnabled,
                                 intervalMinutes: intervalMinutes,
                                 startOnLaunch: startOnLaunch,
                                 language: language)
@@ -317,6 +335,7 @@ final class AppStore: ObservableObject {
         }
         keys = imported.keys
         proxies = imported.proxies
+        proxiesEnabled = imported.proxiesEnabled ?? true
         intervalMinutes = max(1, imported.intervalMinutes)
         startOnLaunch = imported.startOnLaunch
         language = imported.language ?? .systemDefault
@@ -334,6 +353,7 @@ final class AppStore: ObservableObject {
     func resetAll() {
         keys = []
         proxies = []
+        proxiesEnabled = true
         intervalMinutes = 30
         startOnLaunch = false
         language = .systemDefault
