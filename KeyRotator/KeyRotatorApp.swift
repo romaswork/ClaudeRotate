@@ -22,8 +22,9 @@ struct KeyRotatorApp: App {
             RootView()
                 .environmentObject(store)
                 .environmentObject(rotation)
-                .frame(minWidth: 480, minHeight: 360)
+                .frame(minWidth: 680, minHeight: 380)
                 .onAppear {
+                    applyActivationPolicy(hidden: store.hideFromDock)
                     // Restore and immediately write the last active key from the
                     // previous session, so the target file reflects it right away.
                     let restored = rotation.applyCurrentKey()
@@ -33,7 +34,11 @@ struct KeyRotatorApp: App {
                         rotation.start(immediate: !restored)
                     }
                 }
+                .onChange(of: store.hideFromDock) { _, hidden in
+                    applyActivationPolicy(hidden: hidden)
+                }
         }
+        .defaultSize(width: 700, height: 450)
         .windowResizability(.contentMinSize)
         .onChange(of: scenePhase) { _, phase in
             // Safety net: flush any unsaved edits when the app is no longer active.
@@ -48,6 +53,15 @@ struct KeyRotatorApp: App {
             MenuBarLabel(store: store)
         }
         .menuBarExtraStyle(.menu)
+    }
+
+    /// Переключает видимость приложения в Dock. `.accessory` убирает иконку из
+    /// Dock (приложение остаётся в меню-баре); `.regular` показывает её снова.
+    private func applyActivationPolicy(hidden: Bool) {
+        NSApp.setActivationPolicy(hidden ? .accessory : .regular)
+        if !hidden {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 }
 
@@ -76,6 +90,13 @@ struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Button(store.tr("Показать приложение", "Show App")) {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
+        Divider()
+
         if let name = store.currentKeyName {
             Text(store.tr("Активен: \(name)", "Active: \(name)"))
         } else {

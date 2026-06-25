@@ -25,6 +25,9 @@ final class AppStore: ObservableObject {
     @Published var intervalMinutes: Int = 30
     @Published var startOnLaunch: Bool = false
     @Published var language: AppLanguage = .systemDefault
+    // Скрывать иконку приложения из Dock. Когда включено, приложение работает
+    // как accessory (только значок в меню-баре); окно настроек открывается из меню.
+    @Published var hideFromDock: Bool = false
 
     // Security-scoped bookmark to the user-selected target file. Persisted; used
     // to regain access to the file across launches under App Sandbox. Not shown
@@ -57,6 +60,7 @@ final class AppStore: ObservableObject {
         var startOnLaunch: Bool
         var currentKeyID: UUID?
         var language: AppLanguage?
+        var hideFromDock: Bool?
     }
 
     private static var configURL: URL {
@@ -87,6 +91,7 @@ final class AppStore: ObservableObject {
         intervalMinutes = max(1, config.intervalMinutes)
         startOnLaunch = config.startOnLaunch
         language = config.language ?? .systemDefault
+        hideFromDock = config.hideFromDock ?? false
         // Restore the last active key only if it still exists.
         if let id = config.currentKeyID, keys.contains(where: { $0.id == id }) {
             currentKeyID = id
@@ -103,7 +108,8 @@ final class AppStore: ObservableObject {
                             intervalMinutes: intervalMinutes,
                             startOnLaunch: startOnLaunch,
                             currentKeyID: currentKeyID,
-                            language: language)
+                            language: language,
+                            hideFromDock: hideFromDock)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(config) else { return }
@@ -309,6 +315,7 @@ final class AppStore: ObservableObject {
         var intervalMinutes: Int
         var startOnLaunch: Bool
         var language: AppLanguage?
+        var hideFromDock: Bool?
     }
 
     /// Сериализует текущие настройки (ключи, прокси, интервал, автозапуск, язык)
@@ -319,7 +326,8 @@ final class AppStore: ObservableObject {
                                 proxiesEnabled: proxiesEnabled,
                                 intervalMinutes: intervalMinutes,
                                 startOnLaunch: startOnLaunch,
-                                language: language)
+                                language: language,
+                                hideFromDock: hideFromDock)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try? encoder.encode(export)
@@ -339,6 +347,7 @@ final class AppStore: ObservableObject {
         intervalMinutes = max(1, imported.intervalMinutes)
         startOnLaunch = imported.startOnLaunch
         language = imported.language ?? .systemDefault
+        hideFromDock = imported.hideFromDock ?? false
         // Сбрасываем рантайм-состояние, которое могло устареть.
         currentKeyID = nil
         testStates = [:]
@@ -357,6 +366,7 @@ final class AppStore: ObservableObject {
         intervalMinutes = 30
         startOnLaunch = false
         language = .systemDefault
+        hideFromDock = false
         fileBookmark = nil
         filePath = ""
         currentKeyID = nil

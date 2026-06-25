@@ -9,52 +9,84 @@ import UniformTypeIdentifiers
 
 struct RootView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var tab: Tab = .overview
+    @State private var tab: Tab? = .overview
 
-    enum Tab: Hashable { case overview, keys, proxies, settings }
+    enum Tab: Hashable, CaseIterable, Identifiable {
+        case overview, keys, proxies, settings
+        var id: Self { self }
+
+        var icon: String {
+            switch self {
+            case .overview: return "rectangle.on.rectangle"
+            case .keys: return "key"
+            case .proxies: return "network"
+            case .settings: return "gearshape"
+            }
+        }
+
+        func title(_ store: AppStore) -> String {
+            switch self {
+            case .overview: return store.tr("Обзор", "Overview")
+            case .keys: return store.tr("Ключи", "Keys")
+            case .proxies: return store.tr("Прокси", "Proxies")
+            case .settings: return store.tr("Настройки", "Settings")
+            }
+        }
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            tabBar
-            Divider()
+        NavigationSplitView {
+            List(Tab.allCases, selection: $tab) { item in
+                Label(item.title(store), systemImage: item.icon)
+                    .tag(item)
+            }
+            .navigationSplitViewColumnWidth(min: 170, ideal: 185, max: 220)
+            // Логотип-бренд в шапке боковой панели — всегда виден (нативный паттрен
+            // macOS), реальная иконка приложения берётся из `NSApp.applicationIconImage`,
+            // поэтому логотип всегда совпадает с иконкой в Dock и App Store.
+            .safeAreaInset(edge: .top, spacing: 6) {
+                sidebarBrand
+            }
+        } detail: {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationTitle((tab ?? .overview).title(store))
         }
+        .navigationSplitViewStyle(.balanced)
     }
 
-    // Кастомная панель вкладок: на macOS обычный TabView не показывает иконки
-    // из `.tabItem`, поэтому рисуем переключатель сами (иконка + подпись).
-    private var tabBar: some View {
-        HStack(spacing: 4) {
-            tabButton(.overview, store.tr("Обзор", "Overview"), "rectangle.on.rectangle")
-            tabButton(.keys, store.tr("Ключи", "Keys"), "key")
-            tabButton(.proxies, store.tr("Прокси", "Proxies"), "network")
-            tabButton(.settings, store.tr("Настройки", "Settings"), "gearshape")
+    // Шапка боковой панели с логотипом и названием приложения.
+    private var sidebarBrand: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 34, height: 34)
+                    .shadow(color: .black.opacity(0.18), radius: 1.5, y: 1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("KeyRotator")
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(store.tr("Ротация ключей", "Key rotation"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+            Divider()
         }
-        .padding(8)
-    }
-
-    private func tabButton(_ value: Tab, _ title: String, _ icon: String) -> some View {
-        let selected = tab == value
-        return Button {
-            tab = value
-        } label: {
-            Label(title, systemImage: icon)
-                .font(.callout.weight(selected ? .semibold : .regular))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .background(selected ? Color.accentColor.opacity(0.18) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 8))
-                .foregroundStyle(selected ? Color.accentColor : Color.primary)
-                .contentShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(.plain)
+        .background(.bar)
     }
 
     @ViewBuilder
     private var content: some View {
-        switch tab {
-        case .overview: DashboardView()
+        switch tab ?? .overview {
+        case .overview: DashboardView(tab: $tab)
         case .keys: KeysView()
         case .proxies: ProxiesView()
         case .settings: SettingsView()
@@ -67,6 +99,7 @@ struct RootView: View {
 struct DashboardView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var rotation: RotationManager
+    @Binding var tab: RootView.Tab?
 
     // MARK: Derived rotation state
 
@@ -75,20 +108,6 @@ struct DashboardView: View {
     private var currentIndex: Int? {
         guard let id = store.currentKeyID else { return nil }
         return enabled.firstIndex { $0.id == id }
-    }
-
-    private var nextKey: APIKey? {
-        guard !enabled.isEmpty else { return nil }
-        if let idx = currentIndex { return enabled[(idx + 1) % enabled.count] }
-        return enabled.first
-    }
-
-    private var previousKey: APIKey? {
-        guard !enabled.isEmpty else { return nil }
-        if let idx = currentIndex {
-            return enabled[(idx - 1 + enabled.count) % enabled.count]
-        }
-        return enabled.last
     }
 
     private var nextRotationDate: Date? {
@@ -102,16 +121,11 @@ struct DashboardView: View {
                 if !store.hasTargetFile {
                     noFileBanner
                 }
-                statusBanner
-                currentKeyCard
-                HStack(spacing: 14) {
-                    previousKeyCard
-                    nextKeyCard
-                }
+                heroCard
+                statsGrid
                 if let error = store.lastError {
                     errorBanner(error)
                 }
-                controls
             }
             .padding(18)
         }
@@ -138,197 +152,216 @@ struct DashboardView: View {
             }
             Spacer()
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .dashboardCard(padding: 14, tint: .orange)
     }
 
-    // MARK: Status banner
+    // MARK: Hero card (countdown + current key + controls)
 
-    private var statusBanner: some View {
+    // Главный блок: слева крупное кольцо обратного отсчёта, справа — карточка
+    // текущего ключа, снизу — единая группа управления ротацией
+    // (Предыдущий · Старт/Стоп · Следующий).
+    private var heroCard: some View {
         let running = store.isRunning
-        return HStack(spacing: 12) {
-            Image(systemName: running ? "arrow.triangle.2.circlepath" : "pause.circle.fill")
-                .font(.title2)
-                .foregroundStyle(running ? Color.green : Color.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(running ? store.tr("Ротация активна", "Rotation active")
-                             : store.tr("Ротация остановлена", "Rotation stopped"))
-                    .font(.headline)
-                Text(running
-                     ? store.tr("Смена каждые \(store.intervalMinutes) мин · \(enabled.count) из \(store.keys.count) включено",
-                                "Every \(store.intervalMinutes) min · \(enabled.count) of \(store.keys.count) enabled")
-                     : store.tr("\(enabled.count) из \(store.keys.count) ключей включено",
-                                "\(enabled.count) of \(store.keys.count) keys enabled"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        return VStack(spacing: 16) {
+            HStack(alignment: .center, spacing: 20) {
+                countdownRing(running: running)
+                keyDetails
+                Spacer(minLength: 0)
             }
-            Spacer()
-            if let next = nextRotationDate {
-                VStack(alignment: .trailing, spacing: 1) {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        let remaining = next.timeIntervalSince(context.date)
-                        Text(formatRemaining(remaining))
-                            .font(.system(.title3, design: .rounded).weight(.semibold).monospacedDigit())
-                            .foregroundStyle(.green)
+            controlGroup(running: running)
+        }
+        .dashboardCard(tint: running ? .green : nil)
+    }
+
+    // Детали текущего ключа (или приглашение выбрать ключ).
+    @ViewBuilder
+    private var keyDetails: some View {
+        if let key = store.currentKey {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(key.name.isEmpty ? store.tr("Без названия", "Untitled") : key.name)
+                        .font(.title2.weight(.bold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    testIndicator(for: key)
+                    if let idx = currentIndex {
+                        Text("\(idx + 1) / \(enabled.count)")
+                            .font(.caption2.monospacedDigit().weight(.semibold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(.tint.opacity(0.15), in: Capsule())
                     }
-                    Text(store.tr("до смены", "until switch"))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    statusBadge(running: store.isRunning)
+                }
+                infoRow(icon: "lock.fill", label: masked(key.apiKey))
+                infoRow(icon: "link", label: key.baseURL.isEmpty
+                        ? store.tr("Base URL по умолчанию", "Default base URL") : key.baseURL)
+                if let proxy = store.proxy(for: key) {
+                    infoRow(icon: "network", label: proxy.displayName)
+                }
+                if let last = store.lastRotation {
+                    infoRow(icon: "checkmark.circle",
+                            label: store.tr("Применён в \(last.formatted(date: .omitted, time: .standard))",
+                                            "Applied at \(last.formatted(date: .omitted, time: .standard))"))
                 }
             }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(store.tr("Активный ключ не выбран", "No active key"))
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(store.tr("Запустите ротацию или выберите ключ вручную на вкладке «Ключи».",
+                              "Start rotation or pick a key manually on the Keys tab."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // Капсула состояния ротации рядом с именем ключа.
+    private func statusBadge(running: Bool) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(running ? Color.green : Color.secondary)
+                .frame(width: 6, height: 6)
+            Text(running ? store.tr("активна", "active")
+                         : store.tr("остановлена", "stopped"))
+        }
+        .tagChip(tint: running ? .green : .secondary,
+                 opacity: running ? 0.18 : 0.12)
+    }
+
+    // Круговой индикатор обратного отсчёта до следующей смены. Заполняется по мере
+    // приближения смены; когда ротация остановлена или время старта неизвестно —
+    // показывает статическую иконку вместо прогресса.
+    @ViewBuilder
+    private func countdownRing(running: Bool) -> some View {
+        ZStack {
+            Circle().stroke(.quaternary, lineWidth: 7)
+            if let next = nextRotationDate {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let remaining = max(0, next.timeIntervalSince(context.date))
+                    let total = max(1, Double(store.intervalMinutes) * 60)
+                    let progress = min(1, max(0, 1 - remaining / total))
+                    ZStack {
+                        Circle()
+                            .trim(from: 0, to: progress)
+                            .stroke(Color.green,
+                                    style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                            .rotationEffect(.degrees(-90))
+                        VStack(spacing: 1) {
+                            Text(formatRemaining(remaining))
+                                .font(.system(.title3, design: .rounded)
+                                    .weight(.semibold).monospacedDigit())
+                            Text(store.tr("осталось", "left"))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else {
+                Image(systemName: running ? "arrow.triangle.2.circlepath" : "pause.fill")
+                    .font(.title)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 104, height: 104)
+    }
+
+    // MARK: Control group (previous · start/stop · next)
+
+    // Единая лаконичная группа управления: компактные иконочные «Предыдущий» и
+    // «Следующий» по краям, растянутая основная кнопка Запустить/Остановить в центре.
+    private func controlGroup(running: Bool) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                rotation.rotatePrevious()
+            } label: {
+                Image(systemName: "backward.fill")
+            }
+            .help(store.tr("Предыдущий", "Previous"))
+            .disabled(enabled.isEmpty)
+
             Button {
                 if running { rotation.stop() } else { rotation.start() }
             } label: {
                 Label(running ? store.tr("Остановить", "Stop") : store.tr("Запустить", "Start"),
                       systemImage: running ? "pause.fill" : "play.fill")
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .tint(running ? .red : .green)
             .disabled(!running && enabled.isEmpty)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity)
-        .background((running ? Color.green : Color.secondary).opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    // MARK: Current key card
-
-    private var currentKeyCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "key.fill")
-                    .foregroundStyle(.tint)
-                Text(store.tr("Текущий ключ", "Current key"))
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                if let idx = currentIndex {
-                    Text("\(idx + 1) / \(enabled.count)")
-                        .font(.caption.monospacedDigit().weight(.medium))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(.tint.opacity(0.15), in: Capsule())
-                }
-            }
-
-            if let key = store.currentKey {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(key.name.isEmpty ? store.tr("Без названия", "Untitled") : key.name)
-                        .font(.title.weight(.bold))
-                    testIndicator(for: key)
-                }
-
-                infoRow(icon: "lock.fill", label: masked(key.apiKey))
-                infoRow(icon: "link", label: key.baseURL.isEmpty ? store.tr("Base URL по умолчанию", "Default base URL") : key.baseURL)
-                if let proxy = store.proxy(for: key) {
-                    infoRow(icon: "network", label: proxy.displayName)
-                }
-                if let last = store.lastRotation {
-                    infoRow(icon: "clock.arrow.circlepath",
-                            label: store.tr("Применён в \(last.formatted(date: .omitted, time: .standard))",
-                                            "Applied at \(last.formatted(date: .omitted, time: .standard))"))
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(store.tr("Активный ключ не выбран", "No active key"))
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(store.tr("Запустите ротацию или выберите ключ вручную на вкладке «Ключи».",
-                                  "Start rotation or pick a key manually on the Keys tab."))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    // MARK: Previous key card
-
-    private var previousKeyCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(store.tr("Предыдущий ключ", "Previous key"), systemImage: "arrow.left.circle")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            if let prev = previousKey {
-                Text(prev.name.isEmpty ? store.tr("Без названия", "Untitled") : prev.name)
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
-                Text(prev.baseURL.isEmpty ? store.tr("Base URL по умолчанию", "Default base URL") : prev.baseURL)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            } else {
-                Text("—")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(store.tr("Нет включённых ключей", "No enabled keys"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    // MARK: Next key card
-
-    private var nextKeyCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(store.tr("Следующий ключ", "Next key"), systemImage: "arrow.right.circle")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            if let next = nextKey {
-                Text(next.name.isEmpty ? store.tr("Без названия", "Untitled") : next.name)
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
-                Text(next.baseURL.isEmpty ? store.tr("Base URL по умолчанию", "Default base URL") : next.baseURL)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            } else {
-                Text("—")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Text(store.tr("Нет включённых ключей", "No enabled keys"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    // MARK: Controls
-
-    private var controls: some View {
-        HStack(spacing: 12) {
-            Button {
-                rotation.rotatePrevious()
-            } label: {
-                Label(store.tr("Предыдущий", "Previous"), systemImage: "backward.fill")
-                    .frame(maxWidth: .infinity)
-            }
-            .disabled(enabled.isEmpty)
 
             Button {
                 rotation.rotateNow()
             } label: {
-                Label(store.tr("Следующий", "Next"), systemImage: "forward.fill")
-                    .frame(maxWidth: .infinity)
+                Image(systemName: "forward.fill")
             }
+            .help(store.tr("Следующий", "Next"))
             .disabled(enabled.isEmpty)
         }
         .controlSize(.large)
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.bordered)
+    }
+
+    // MARK: Stats grid
+
+    // Ряд компактных плиток со сводкой: включённые ключи, интервал, прокси и
+    // время следующей смены — вся ключевая статистика с первого взгляда.
+    private var statsGrid: some View {
+        HStack(spacing: 12) {
+            statTile(icon: "key.fill",
+                     value: "\(enabled.count) / \(store.keys.count)",
+                     label: store.tr("включено", "enabled"),
+                     tint: .accentColor,
+                     destination: .keys)
+            statTile(icon: "timer",
+                     value: store.tr("\(store.intervalMinutes) мин", "\(store.intervalMinutes) min"),
+                     label: store.tr("интервал", "interval"),
+                     tint: .blue,
+                     destination: .settings)
+            statTile(icon: store.proxiesEnabled ? "network" : "network.slash",
+                     value: "\(store.proxies.count)",
+                     label: store.proxiesEnabled ? store.tr("прокси", "proxies")
+                                                 : store.tr("выключены", "off"),
+                     tint: store.proxiesEnabled ? .purple : .secondary,
+                     destination: .proxies)
+            statTile(icon: "clock.arrow.circlepath",
+                     value: nextRotationText,
+                     label: store.tr("след. смена", "next"),
+                     tint: store.isRunning ? .green : .secondary,
+                     destination: .settings)
+        }
+    }
+
+    private func statTile(icon: String, value: String, label: String, tint: Color, destination: RootView.Tab) -> some View {
+        Button {
+            tab = destination
+        } label: {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(tint)
+                Text(value)
+                    .font(.callout.weight(.semibold).monospacedDigit())
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .dashboardCard(padding: 12)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var nextRotationText: String {
+        guard let next = nextRotationDate else { return "—" }
+        return next.formatted(date: .omitted, time: .shortened)
     }
 
     // MARK: Helpers
@@ -337,10 +370,7 @@ struct DashboardView: View {
         Label(message, systemImage: "exclamationmark.triangle.fill")
             .font(.callout)
             .foregroundStyle(.red)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+            .dashboardCard(padding: 12, tint: .red)
     }
 
     private func infoRow(icon: String, label: String) -> some View {
@@ -395,6 +425,82 @@ struct DashboardView: View {
     }
 }
 
+// MARK: - Reusable list UI
+
+/// Иконочная кнопка нижнего тулбара списков — единый размер и стиль, чтобы не
+/// дублировать `Image(...).frame(...)` + `.help` + `.disabled` в каждой вкладке.
+private struct ToolbarIconButton: View {
+    let systemName: String
+    let help: String
+    var disabled: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .frame(width: 24, height: 22)
+        }
+        .help(help)
+        .disabled(disabled)
+    }
+}
+
+/// Поле поиска над списком (ключей/прокси) с кнопкой очистки.
+private struct ListSearchField: View {
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+    }
+}
+
+private extension View {
+    /// Единый стиль бейджа-капсулы (активность, счётчики, прокси).
+    func tagChip(tint: Color = .secondary, opacity: Double = 0.15) -> some View {
+        self
+            .font(.caption2.weight(.semibold))
+            .lineLimit(1)
+            .foregroundStyle(tint)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(tint.opacity(opacity), in: Capsule())
+    }
+
+    /// Единый стиль карточки дашборда: материал-фон, тонкая обводка, единый радиус.
+    /// Цветовой акцент карточки задаётся через `tint` (тонкая обводка + лёгкий фон),
+    /// чтобы не заливать всю карточку насыщенным цветом.
+    func dashboardCard(padding: CGFloat = 16, tint: Color? = nil) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        return self
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.secondary, in: shape)
+            .background(tint.map { $0.opacity(0.08) } ?? .clear, in: shape)
+            .overlay(shape.stroke(tint?.opacity(0.35) ?? Color.primary.opacity(0.08),
+                                  lineWidth: 1))
+    }
+}
+
 // MARK: - Keys
 
 struct KeysView: View {
@@ -404,13 +510,52 @@ struct KeysView: View {
     @State private var editorKey: APIKey?
     @State private var editorIsNew = false
     @State private var selection: APIKey.ID?
+    @State private var search = ""
+    @State private var keyToDelete: APIKey?
+
+    // Ключи, отфильтрованные строкой поиска (по имени и base URL).
+    private var filteredKeys: [APIKey] {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return store.keys }
+        return store.keys.filter {
+            $0.name.lowercased().contains(q) || $0.baseURL.lowercased().contains(q)
+        }
+    }
+
+    // Биндинг к элементу `store.keys` по id (нужен строкам, т.к. при фильтрации
+    // ForEach идёт по значениям, а не по `$store.keys`).
+    private func binding(for key: APIKey) -> Binding<APIKey> {
+        Binding(
+            get: { store.keys.first(where: { $0.id == key.id }) ?? key },
+            set: { newValue in
+                if let idx = store.keys.firstIndex(where: { $0.id == key.id }) {
+                    store.keys[idx] = newValue
+                }
+            }
+        )
+    }
+
+    // Фон строки во всю ширину (единый механизм для зебры и подсветки, чтобы они
+    // совпадали по форме): активный ключ — зелёная заливка, выключенный —
+    // приглушённая серая, остальные — собственная «зебра» по чётности индекса.
+    private func rowBackground(for key: APIKey, index: Int) -> Color {
+        if store.currentKeyID == key.id { return Color.green.opacity(0.22) }
+        if !key.enabled { return Color.secondary.opacity(0.22) }
+        return index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if store.keys.isEmpty {
                 emptyState
             } else {
-                keyList
+                ListSearchField(placeholder: store.tr("Поиск ключей", "Search keys"),
+                                text: $search)
+                if filteredKeys.isEmpty {
+                    ContentUnavailableView.search(text: search)
+                } else {
+                    keyList
+                }
             }
             Divider()
             bottomBar
@@ -424,110 +569,108 @@ struct KeysView: View {
                 }
             }
         }
+        .alert(store.tr("Удалить ключ?", "Delete key?"),
+               isPresented: Binding(get: { keyToDelete != nil },
+                                    set: { if !$0 { keyToDelete = nil } }),
+               presenting: keyToDelete) { key in
+            Button(store.tr("Удалить", "Delete"), role: .destructive) {
+                if selection == key.id { selection = nil }
+                store.deleteKey(key)
+            }
+            Button(store.tr("Отмена", "Cancel"), role: .cancel) { }
+        } message: { key in
+            let name = key.name.isEmpty ? store.tr("Без названия", "Untitled") : key.name
+            Text(store.tr("«\(name)» будет удалён безвозвратно.",
+                          "“\(name)” will be deleted permanently."))
+        }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "key.horizontal")
-                .font(.system(size: 44))
-                .foregroundStyle(.secondary)
-            Text(store.tr("Нет ключей", "No API Keys"))
-                .font(.title3.weight(.semibold))
+        ContentUnavailableView {
+            Label(store.tr("Нет ключей", "No API Keys"), systemImage: "key.horizontal")
+        } description: {
             Text(store.tr("Добавьте ключ, чтобы начать ротацию.",
                           "Add a key to start rotating credentials."))
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        } actions: {
             Button {
                 presentNew()
             } label: {
                 Label(store.tr("Добавить ключ", "Add Key"), systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
-            .padding(.top, 4)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var keyList: some View {
         List(selection: $selection) {
-            ForEach($store.keys) { $key in
-                KeyRow(key: $key,
+            ForEach(Array(filteredKeys.enumerated()), id: \.element.id) { index, key in
+                KeyRow(key: binding(for: key),
                        isActive: store.currentKeyID == key.id,
-                       testState: store.testStates[key.id]) {
-                    store.save()
-                }
-                .tag(key.id)
-                .simultaneousGesture(TapGesture(count: 2).onEnded { presentEdit(key) })
-                .contextMenu {
-                    Button(store.tr("Проверить", "Test")) { store.test(key) }
-                    Button(store.tr("Сделать активным", "Set as Active Now")) { rotation.apply(key) }
-                        .disabled(store.currentKeyID == key.id)
-                    Divider()
-                    Button(store.tr("Изменить", "Edit")) { presentEdit(key) }
-                    Button(store.tr("Удалить", "Delete"), role: .destructive) { store.deleteKey(key) }
-                }
+                       testState: store.testStates[key.id],
+                       onToggle: { store.save() },
+                       onTest: { store.test(key) },
+                       onEdit: { presentEdit(key) },
+                       onActivate: { rotation.apply(key) },
+                       onDelete: { keyToDelete = key })
+                    .tag(key.id)
+                    .listRowBackground(rowBackground(for: key, index: index))
+                    .simultaneousGesture(TapGesture(count: 2).onEnded { presentEdit(key) })
+                    .contextMenu {
+                        Button(store.tr("Проверить", "Test")) { store.test(key) }
+                        Button(store.tr("Сделать активным", "Set as Active Now")) { rotation.apply(key) }
+                            .disabled(store.currentKeyID == key.id)
+                        Divider()
+                        Button(store.tr("Изменить", "Edit")) { presentEdit(key) }
+                        Button(store.tr("Удалить", "Delete"), role: .destructive) { keyToDelete = key }
+                    }
             }
-            .onMove { store.move(from: $0, to: $1) }
+            // Перетаскивание доступно только без активного поиска: тогда индексы
+            // отфильтрованного списка совпадают с `store.keys`.
+            .onMove(perform: search.isEmpty ? { store.move(from: $0, to: $1) } : nil)
         }
-        .listStyle(.inset(alternatesRowBackgrounds: true))
+        .listStyle(.inset)
     }
 
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            Button {
+            ToolbarIconButton(systemName: "plus",
+                              help: store.tr("Добавить ключ", "Add key")) {
                 presentNew()
-            } label: {
-                Image(systemName: "plus")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Добавить ключ", "Add key"))
 
-            Button {
+            ToolbarIconButton(systemName: "minus",
+                              help: store.tr("Удалить выбранный ключ", "Remove selected key"),
+                              disabled: selection == nil) {
                 if let id = selection, let key = store.keys.first(where: { $0.id == id }) {
-                    store.deleteKey(key)
-                    selection = nil
+                    keyToDelete = key
                 }
-            } label: {
-                Image(systemName: "minus")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Удалить выбранный ключ", "Remove selected key"))
-            .disabled(selection == nil)
 
             Divider().frame(height: 16)
 
-            Button {
+            ToolbarIconButton(systemName: "pencil",
+                              help: store.tr("Изменить выбранный ключ", "Edit selected key"),
+                              disabled: selection == nil) {
                 if let id = selection, let key = store.keys.first(where: { $0.id == id }) {
                     presentEdit(key)
                 }
-            } label: {
-                Image(systemName: "pencil")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Изменить выбранный ключ", "Edit selected key"))
-            .disabled(selection == nil)
 
-            Button {
+            ToolbarIconButton(systemName: "checkmark.circle",
+                              help: store.tr("Сделать выбранный ключ активным", "Set selected key as active now"),
+                              disabled: selection == nil || selection == store.currentKeyID) {
                 if let id = selection, let key = store.keys.first(where: { $0.id == id }) {
                     rotation.apply(key)
                 }
-            } label: {
-                Image(systemName: "checkmark.circle")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Сделать выбранный ключ активным", "Set selected key as active now"))
-            .disabled(selection == nil || selection == store.currentKeyID)
 
             Divider().frame(height: 16)
 
-            Button {
+            ToolbarIconButton(systemName: "checkmark.shield",
+                              help: store.tr("Проверить все ключи", "Test all keys"),
+                              disabled: store.keys.isEmpty) {
                 store.testAll()
-            } label: {
-                Image(systemName: "checkmark.shield")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Проверить все ключи", "Test all keys"))
-            .disabled(store.keys.isEmpty)
 
             Spacer()
         }
@@ -554,13 +697,15 @@ struct KeyRow: View {
     let isActive: Bool
     let testState: KeyTestState?
     let onToggle: () -> Void
+    let onTest: () -> Void
+    let onEdit: () -> Void
+    let onActivate: () -> Void
+    let onDelete: () -> Void
+
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "line.3.horizontal")
-                .font(.body)
-                .foregroundStyle(.tertiary)
-                .help(store.tr("Перетащите, чтобы изменить порядок", "Drag to reorder"))
             statusDot
             VStack(alignment: .leading, spacing: 2) {
                 Text(key.name.isEmpty ? store.tr("Без названия", "Untitled") : key.name)
@@ -576,14 +721,7 @@ struct KeyRow: View {
                 proxyChip(proxy)
             }
             testIndicator
-            if isActive {
-                Text(store.tr("Активен", "Active"))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.green)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(.green.opacity(0.15), in: Capsule())
-            }
+            hoverActions
             Toggle("", isOn: $key.enabled)
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -591,6 +729,7 @@ struct KeyRow: View {
                 .onChange(of: key.enabled) { _, _ in onToggle() }
         }
         .padding(.vertical, 4)
+        .onHover { hovering = $0 }
     }
 
     private var statusDot: some View {
@@ -599,22 +738,48 @@ struct KeyRow: View {
             .frame(width: 8, height: 8)
     }
 
+    // Кнопки действий, проявляющиеся при наведении на строку. Пространство
+    // зарезервировано всегда (opacity), чтобы остальные элементы не «прыгали».
+    private var hoverActions: some View {
+        HStack(spacing: 2) {
+            rowAction("checkmark.shield", store.tr("Проверить", "Test"), action: onTest)
+            rowAction("pencil", store.tr("Изменить", "Edit"), action: onEdit)
+            rowAction("checkmark.circle", store.tr("Сделать активным", "Set as active"),
+                      disabled: isActive, action: onActivate)
+            rowAction("trash", store.tr("Удалить", "Delete"), tint: .red, action: onDelete)
+        }
+        .opacity(hovering ? 1 : 0)
+        .allowsHitTesting(hovering)
+        .animation(.easeInOut(duration: 0.12), value: hovering)
+    }
+
+    private func rowAction(_ icon: String, _ help: String, tint: Color = .secondary,
+                           disabled: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(disabled ? AnyShapeStyle(.tertiary) : AnyShapeStyle(tint))
+        .disabled(disabled)
+        .help(help)
+    }
+
     // Бейдж с названием привязанного прокси. Когда прокси отключены глобально,
     // показывается приглушённо с подсказкой, что он не применяется.
     private func proxyChip(_ proxy: Proxy) -> some View {
         let active = store.proxiesEnabled
-        return Label(proxy.displayName, systemImage: "network")
-            .labelStyle(.titleAndIcon)
-            .font(.caption2.weight(.medium))
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .foregroundStyle(active ? Color.secondary : Color.secondary.opacity(0.5))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(.secondary.opacity(active ? 0.15 : 0.08), in: Capsule())
-            .help(active
-                  ? store.tr("Прокси: \(proxy.displayName)", "Proxy: \(proxy.displayName)")
-                  : store.tr("Прокси отключены глобально в настройках", "Proxies are disabled globally in Settings"))
+        return HStack(spacing: 3) {
+            Image(systemName: "network")
+            Text(proxy.displayName)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .tagChip(tint: active ? Color.secondary : Color.secondary.opacity(0.5),
+                 opacity: active ? 0.15 : 0.08)
+        .help(active
+              ? store.tr("Прокси: \(proxy.displayName)", "Proxy: \(proxy.displayName)")
+              : store.tr("Прокси отключены глобально в настройках", "Proxies are disabled globally in Settings"))
     }
 
     @ViewBuilder
@@ -624,12 +789,17 @@ struct KeyRow: View {
             ProgressView()
                 .controlSize(.small)
         case .success:
-            Image(systemName: "checkmark.circle.fill")
+            Label(store.tr("Валиден", "Valid"), systemImage: "checkmark.circle.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.caption2)
                 .foregroundStyle(.green)
                 .help(store.tr("Валиден", "Valid"))
         case .failure(let message):
-            Image(systemName: "xmark.octagon.fill")
+            Label(message, systemImage: "xmark.octagon.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.caption2)
                 .foregroundStyle(.red)
+                .lineLimit(1)
                 .help(message)
         case nil:
             EmptyView()
@@ -813,21 +983,31 @@ struct SettingsView: View {
             }
 
             Section {
-                HStack {
-                    Text(store.tr("Интервал (минуты)", "Interval (minutes)"))
-                    Spacer()
-                    TextField("", value: $store.intervalMinutes, format: .number)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 60)
-                        .multilineTextAlignment(.trailing)
-                        .onChange(of: store.intervalMinutes) { _, newValue in
-                            if newValue < 1 { store.intervalMinutes = 1 }
-                            store.save()
-                            rotation.restartIfRunning()
-                        }
-                    Stepper("", value: $store.intervalMinutes, in: 1...1440)
-                        .labelsHidden()
+                LabeledContent(store.tr("Интервал", "Interval")) {
+                    HStack(spacing: 8) {
+                        TextField("", value: $store.intervalMinutes, format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 56)
+                            .multilineTextAlignment(.trailing)
+                        Text(store.tr("мин", "min"))
+                            .foregroundStyle(.secondary)
+                        Stepper("", value: $store.intervalMinutes, in: 1...1440)
+                            .labelsHidden()
+                    }
                 }
+                .onChange(of: store.intervalMinutes) { _, newValue in
+                    if newValue < 1 { store.intervalMinutes = 1 }
+                    store.save()
+                    rotation.restartIfRunning()
+                }
+
+                Picker(store.tr("Быстрый выбор", "Quick set"), selection: $store.intervalMinutes) {
+                    Text("15").tag(15)
+                    Text("30").tag(30)
+                    Text("60").tag(60)
+                    Text("120").tag(120)
+                }
+                .pickerStyle(.segmented)
 
                 Toggle(store.tr("Запускать ротацию при старте", "Start rotation on launch"),
                        isOn: $store.startOnLaunch)
@@ -861,6 +1041,10 @@ struct SettingsView: View {
                     }
                 }
                 .onChange(of: store.language) { _, _ in store.save() }
+
+                Toggle(store.tr("Скрывать из Dock", "Hide from Dock"),
+                       isOn: $store.hideFromDock)
+                    .onChange(of: store.hideFromDock) { _, _ in store.save() }
             } header: {
                 Label(store.tr("Интерфейс", "Interface"), systemImage: "globe")
             }
@@ -878,17 +1062,24 @@ struct SettingsView: View {
                         Label(store.tr("Импорт…", "Import…"), systemImage: "square.and.arrow.down")
                     }
                     Spacer()
-                    Button(role: .destructive) {
-                        showResetConfirm = true
-                    } label: {
-                        Label(store.tr("Сбросить всё…", "Reset all…"), systemImage: "trash")
-                    }
                 }
             } header: {
                 Label(store.tr("Данные", "Data"), systemImage: "externaldrive")
             } footer: {
-                Text(store.tr("Экспорт сохраняет ключи, прокси и настройки в файл. Выбранный целевой файл не переносится. Сброс удаляет все ключи, прокси и настройки (сам settings.json не трогается).",
-                              "Export saves keys, proxies and settings to a file. The selected target file is not included. Reset removes all keys, proxies and settings (your settings.json is left untouched)."))
+                Text(store.tr("Экспорт сохраняет ключи, прокси и настройки в файл. Выбранный целевой файл не переносится.",
+                              "Export saves keys, proxies and settings to a file. The selected target file is not included."))
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    showResetConfirm = true
+                } label: {
+                    Label(store.tr("Сбросить всё…", "Reset all…"), systemImage: "trash")
+                        .foregroundStyle(.red)
+                }
+            } footer: {
+                Text(store.tr("Удаляет все ключи, прокси и настройки без возможности восстановления. Сам settings.json не трогается.",
+                              "Removes all keys, proxies and settings permanently. Your settings.json is left untouched."))
             }
         }
         .formStyle(.grouped)
@@ -982,13 +1173,42 @@ struct ProxiesView: View {
     @State private var editorProxy: Proxy?
     @State private var editorIsNew = false
     @State private var selection: Proxy.ID?
+    @State private var search = ""
+    @State private var proxyToDelete: Proxy?
+
+    // Прокси, отфильтрованные строкой поиска (по имени и хосту).
+    private var filteredProxies: [Proxy] {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return store.proxies }
+        return store.proxies.filter {
+            $0.name.lowercased().contains(q) || $0.host.lowercased().contains(q)
+        }
+    }
+
+    // Биндинг к элементу `store.proxies` по id (нужен строкам при фильтрации).
+    private func binding(for proxy: Proxy) -> Binding<Proxy> {
+        Binding(
+            get: { store.proxies.first(where: { $0.id == proxy.id }) ?? proxy },
+            set: { newValue in
+                if let idx = store.proxies.firstIndex(where: { $0.id == proxy.id }) {
+                    store.proxies[idx] = newValue
+                }
+            }
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if store.proxies.isEmpty {
                 emptyState
             } else {
-                proxyList
+                ListSearchField(placeholder: store.tr("Поиск прокси", "Search proxies"),
+                                text: $search)
+                if filteredProxies.isEmpty {
+                    ContentUnavailableView.search(text: search)
+                } else {
+                    proxyList
+                }
             }
             Divider()
             bottomBar
@@ -1003,106 +1223,108 @@ struct ProxiesView: View {
                 }
             }
         }
+        .alert(store.tr("Удалить прокси?", "Delete proxy?"),
+               isPresented: Binding(get: { proxyToDelete != nil },
+                                    set: { if !$0 { proxyToDelete = nil } }),
+               presenting: proxyToDelete) { proxy in
+            Button(store.tr("Удалить", "Delete"), role: .destructive) {
+                if selection == proxy.id { selection = nil }
+                store.deleteProxy(proxy)
+            }
+            Button(store.tr("Отмена", "Cancel"), role: .cancel) { }
+        } message: { proxy in
+            let name = proxy.name.isEmpty ? store.tr("Без названия", "Untitled") : proxy.name
+            let used = usageCount(of: proxy.id)
+            let suffix = used > 0
+                ? store.tr(" Он будет отвязан от ключей: \(used).",
+                           " It will be detached from \(used) key(s).")
+                : ""
+            Text(store.tr("«\(name)» будет удалён безвозвратно.\(suffix)",
+                          "“\(name)” will be deleted permanently.\(suffix)"))
+        }
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "network")
-                .font(.system(size: 44))
-                .foregroundStyle(.secondary)
-            Text(store.tr("Нет прокси", "No Proxies"))
-                .font(.title3.weight(.semibold))
+        ContentUnavailableView {
+            Label(store.tr("Нет прокси", "No Proxies"), systemImage: "network")
+        } description: {
             Text(store.tr("Добавьте прокси, чтобы привязывать его к ключам.",
                           "Add a proxy to assign it to your keys."))
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        } actions: {
             Button {
                 presentNew()
             } label: {
                 Label(store.tr("Добавить прокси", "Add Proxy"), systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
-            .padding(.top, 4)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var proxyList: some View {
         List(selection: $selection) {
-            ForEach($store.proxies) { $proxy in
-                ProxyRow(proxy: $proxy,
+            ForEach(Array(filteredProxies.enumerated()), id: \.element.id) { index, proxy in
+                ProxyRow(proxy: binding(for: proxy),
                          usageCount: usageCount(of: proxy.id),
-                         testState: store.proxyTestStates[proxy.id])
+                         testState: store.proxyTestStates[proxy.id],
+                         onTest: { store.testProxy(proxy) },
+                         onEdit: { presentEdit(proxy) },
+                         onDelete: { proxyToDelete = proxy })
                     .tag(proxy.id)
+                    .listRowBackground(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04))
                     .simultaneousGesture(TapGesture(count: 2).onEnded { presentEdit(proxy) })
                     .contextMenu {
                         Button(store.tr("Проверить", "Test")) { store.testProxy(proxy) }
                         Divider()
                         Button(store.tr("Изменить", "Edit")) { presentEdit(proxy) }
-                        Button(store.tr("Удалить", "Delete"), role: .destructive) { store.deleteProxy(proxy) }
+                        Button(store.tr("Удалить", "Delete"), role: .destructive) { proxyToDelete = proxy }
                     }
             }
-            .onMove { store.moveProxy(from: $0, to: $1) }
+            // Перетаскивание — только без активного поиска (см. KeysView).
+            .onMove(perform: search.isEmpty ? { store.moveProxy(from: $0, to: $1) } : nil)
         }
-        .listStyle(.inset(alternatesRowBackgrounds: true))
+        .listStyle(.inset)
     }
 
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            Button {
+            ToolbarIconButton(systemName: "plus",
+                              help: store.tr("Добавить прокси", "Add proxy")) {
                 presentNew()
-            } label: {
-                Image(systemName: "plus")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Добавить прокси", "Add proxy"))
 
-            Button {
+            ToolbarIconButton(systemName: "minus",
+                              help: store.tr("Удалить выбранный прокси", "Remove selected proxy"),
+                              disabled: selection == nil) {
                 if let id = selection, let proxy = store.proxies.first(where: { $0.id == id }) {
-                    store.deleteProxy(proxy)
-                    selection = nil
+                    proxyToDelete = proxy
                 }
-            } label: {
-                Image(systemName: "minus")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Удалить выбранный прокси", "Remove selected proxy"))
-            .disabled(selection == nil)
 
             Divider().frame(height: 16)
 
-            Button {
+            ToolbarIconButton(systemName: "pencil",
+                              help: store.tr("Изменить выбранный прокси", "Edit selected proxy"),
+                              disabled: selection == nil) {
                 if let id = selection, let proxy = store.proxies.first(where: { $0.id == id }) {
                     presentEdit(proxy)
                 }
-            } label: {
-                Image(systemName: "pencil")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Изменить выбранный прокси", "Edit selected proxy"))
-            .disabled(selection == nil)
 
-            Button {
+            ToolbarIconButton(systemName: "checkmark.shield",
+                              help: store.tr("Проверить выбранный прокси", "Test selected proxy"),
+                              disabled: selection == nil) {
                 if let id = selection, let proxy = store.proxies.first(where: { $0.id == id }) {
                     store.testProxy(proxy)
                 }
-            } label: {
-                Image(systemName: "checkmark.shield")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Проверить выбранный прокси", "Test selected proxy"))
-            .disabled(selection == nil)
 
             Divider().frame(height: 16)
 
-            Button {
+            ToolbarIconButton(systemName: "checkmark.shield.fill",
+                              help: store.tr("Проверить все прокси", "Test all proxies"),
+                              disabled: store.proxies.isEmpty) {
                 store.testAllProxies()
-            } label: {
-                Image(systemName: "checkmark.shield.fill")
-                    .frame(width: 24, height: 22)
             }
-            .help(store.tr("Проверить все прокси", "Test all proxies"))
-            .disabled(store.proxies.isEmpty)
 
             Spacer()
         }
@@ -1131,13 +1353,14 @@ struct ProxyRow: View {
     @Binding var proxy: Proxy
     let usageCount: Int
     let testState: ProxyTestState?
+    let onTest: () -> Void
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "line.3.horizontal")
-                .font(.body)
-                .foregroundStyle(.tertiary)
-                .help(store.tr("Перетащите, чтобы изменить порядок", "Drag to reorder"))
             Image(systemName: "network")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
@@ -1157,16 +1380,39 @@ struct ProxyRow: View {
                     .foregroundStyle(.secondary)
                     .help(store.tr("С авторизацией", "With authentication"))
             }
+            hoverActions
             if usageCount > 0 {
                 Text(store.tr("\(usageCount) ключ.", "\(usageCount) key(s)"))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(.secondary.opacity(0.15), in: Capsule())
+                    .tagChip()
+                    .help(store.tr("Используется ключами: \(usageCount)",
+                                   "Used by \(usageCount) key(s)"))
             }
         }
         .padding(.vertical, 4)
+        .onHover { hovering = $0 }
+    }
+
+    // Кнопки действий, проявляющиеся при наведении (см. KeyRow.hoverActions).
+    private var hoverActions: some View {
+        HStack(spacing: 2) {
+            rowAction("checkmark.shield", store.tr("Проверить", "Test"), action: onTest)
+            rowAction("pencil", store.tr("Изменить", "Edit"), action: onEdit)
+            rowAction("trash", store.tr("Удалить", "Delete"), tint: .red, action: onDelete)
+        }
+        .opacity(hovering ? 1 : 0)
+        .allowsHitTesting(hovering)
+        .animation(.easeInOut(duration: 0.12), value: hovering)
+    }
+
+    private func rowAction(_ icon: String, _ help: String, tint: Color = .secondary,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(tint)
+        .help(help)
     }
 
     private var endpoint: String {
