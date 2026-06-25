@@ -144,7 +144,9 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 Собранное приложение: `~/Library/Developer/Xcode/DerivedData/ClaudeRotate-*/Build/Products/Debug/KeyRotator.app`.
 
 ## Технические детали
-- macOS deployment target: 26.5, Swift 5.0, изоляция по умолчанию — MainActor.
+- macOS deployment target: 14.0, Swift 5.0, изоляция по умолчанию — MainActor.
+  Планку держат API уровня macOS 14: `ContentUnavailableView`/`.search`,
+  двухпараметрический `.onChange(of:) { _, _ in }`, `.background(.background.secondary, in:)`.
 - Bundle ID: `com.romas.clauderotatekey`. Таргет, папка исходников (`KeyRotator/`) и
   имя приложения (`CFBundleName`/`CFBundleDisplayName`/`PRODUCT_NAME`) — **KeyRotator**
   (нейтральное, без товарного знака «Claude»; совместимость с Claude Code указывается
