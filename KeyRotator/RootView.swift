@@ -118,7 +118,7 @@ struct DashboardView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 14) {
-                if !store.hasTargetFile {
+                if !store.hasAnyActiveTarget {
                     noFileBanner
                 }
                 heroCard
@@ -142,10 +142,10 @@ struct DashboardView: View {
                 .font(.title2)
                 .foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text(store.tr("Целевой файл не выбран", "No target file selected"))
+                Text(store.tr("Нет активного целевого файла", "No active target file"))
                     .font(.headline)
-                Text(store.tr("Откройте «Настройки» и выберите файл settings.json — без него ротация не сможет записывать ключи.",
-                              "Open Settings and choose your settings.json — rotation can't write keys without it."))
+                Text(store.tr("Откройте «Настройки», выберите и включите хотя бы один целевой файл — без него ротация не сможет записывать ключи.",
+                              "Open Settings, choose and enable at least one target file — rotation can't write keys without it."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -954,28 +954,27 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                HStack(spacing: 8) {
-                    Image(systemName: store.hasTargetFile ? "doc.text.fill" : "doc.text")
-                        .foregroundStyle(store.hasTargetFile ? .green : .secondary)
-                    Text(store.filePath.isEmpty
-                         ? store.tr("Файл не выбран", "No file selected")
-                         : store.filePath)
-                        .font(.system(.callout, design: .monospaced))
-                        .foregroundStyle(store.filePath.isEmpty ? .secondary : .primary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                    Spacer()
-                    Button(store.tr("Выбрать…", "Choose…")) { browse() }
-                }
+                targetFileRow(title: store.tr("Claude Code (settings.json)", "Claude Code (settings.json)"),
+                              isOn: $store.claudeEnabled,
+                              hasFile: store.hasTargetFile,
+                              path: store.filePath,
+                              choose: { browse() })
+                targetFileRow(title: store.tr("Codex (auth.json)", "Codex (auth.json)"),
+                              isOn: $store.codexEnabled,
+                              hasFile: store.hasCodexFile,
+                              path: store.codexFilePath,
+                              choose: { browseCodex() })
             } header: {
-                Label(store.tr("Целевой файл", "Target File"), systemImage: "doc.text")
+                Label(store.tr("Целевые файлы", "Target Files"), systemImage: "doc.text")
             } footer: {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(store.tr("Выберите файл settings.json. Доступ к нему сохраняется между запусками.",
-                                  "Pick your settings.json. Access to it is preserved across launches."))
-                    Text(store.tr("Обычно файл настроек Claude Code лежит здесь: \(defaultSettingsURL.path)",
-                                  "Claude Code usually keeps its settings here: \(defaultSettingsURL.path)"))
+                    Text(store.tr("Включите цели, в которые при ротации будет записываться текущий ключ. Доступ к выбранным файлам сохраняется между запусками.",
+                                  "Enable the targets the current key is written to on rotation. Access to selected files is preserved across launches."))
+                    Text("\(defaultSettingsURL.path)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Text("\(defaultCodexURL.path)")
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
@@ -1142,25 +1141,70 @@ struct SettingsView: View {
         realHomeDirectory.appendingPathComponent(".claude/settings.json")
     }
 
+    /// Typical location of the Codex auth file for the current user.
+    private var defaultCodexURL: URL {
+        realHomeDirectory.appendingPathComponent(".codex/auth.json")
+    }
+
+    /// Одна строка целевого файла: переключатель включения, индикатор/путь и
+    /// кнопка выбора файла. При смене переключателя сохраняем и сразу применяем
+    /// текущий ключ, чтобы включённая цель получила его без ожидания ротации.
+    @ViewBuilder
+    private func targetFileRow(title: String,
+                               isOn: Binding<Bool>,
+                               hasFile: Bool,
+                               path: String,
+                               choose: @escaping () -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: isOn) { Text(title) }
+                .onChange(of: isOn.wrappedValue) { _, _ in
+                    store.save()
+                    if let key = store.currentKey { rotation.apply(key) }
+                }
+            HStack(spacing: 8) {
+                Image(systemName: hasFile ? "doc.text.fill" : "doc.text")
+                    .foregroundStyle(hasFile ? .green : .secondary)
+                Text(path.isEmpty
+                     ? store.tr("Файл не выбран", "No file selected")
+                     : path)
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundStyle(path.isEmpty ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                Spacer()
+                Button(store.tr("Выбрать…", "Choose…")) { choose() }
+            }
+        }
+    }
+
     private func browse() {
+        pickJSON(near: defaultSettingsURL) { store.setTargetFile($0) }
+    }
+
+    private func browseCodex() {
+        pickJSON(near: defaultCodexURL) { store.setCodexFile($0) }
+    }
+
+    /// Открывает `NSOpenPanel` для выбора JSON-файла, пред-навигируя к `suggested`
+    /// (скрытые папки `.claude`/`.codex` делаются видимыми). При подтверждении
+    /// вызывает `onPick` с выбранным URL. Песочница требует явного подтверждения
+    /// для предоставления доступа.
+    private func pickJSON(near suggested: URL, onPick: (URL) -> Void) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.json]
-        // `.claude` is a hidden folder — make it visible and pre-navigate the panel
-        // to the default settings file so the user only has to confirm. The sandbox
-        // still requires this explicit confirmation to grant access.
         panel.showsHiddenFiles = true
-        let def = defaultSettingsURL
-        if FileManager.default.fileExists(atPath: def.path) {
-            panel.directoryURL = def.deletingLastPathComponent()
-            panel.nameFieldStringValue = def.lastPathComponent
+        if FileManager.default.fileExists(atPath: suggested.path) {
+            panel.directoryURL = suggested.deletingLastPathComponent()
+            panel.nameFieldStringValue = suggested.lastPathComponent
         } else {
             panel.directoryURL = realHomeDirectory
         }
         if panel.runModal() == .OK, let url = panel.url {
-            store.setTargetFile(url)
+            onPick(url)
         }
     }
 }

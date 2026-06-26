@@ -19,9 +19,15 @@ final class AppStore: ObservableObject {
     // привязанные к ключам (переменные HTTPS_PROXY/HTTP_PROXY удаляются из файла),
     // но сами привязки ключей сохраняются.
     @Published var proxiesEnabled: Bool = true
-    // Display-only path of the selected target file (resolved from the bookmark).
-    // Under App Sandbox actual file access goes through `fileBookmark`, NOT this.
+    // Display-only path of the selected Claude target file (resolved from the
+    // bookmark). Under App Sandbox actual file access goes through `fileBookmark`.
     @Published var filePath: String = ""
+    // Включена ли запись в Claude-цель (settings.json) при ротации.
+    @Published var claudeEnabled: Bool = true
+    // Display-only path of the selected Codex target file (auth.json).
+    @Published var codexFilePath: String = ""
+    // Включена ли запись в Codex-цель (auth.json) при ротации.
+    @Published var codexEnabled: Bool = false
     @Published var intervalMinutes: Int = 30
     @Published var startOnLaunch: Bool = false
     @Published var language: AppLanguage = .systemDefault
@@ -29,10 +35,12 @@ final class AppStore: ObservableObject {
     // как accessory (только значок в меню-баре); окно настроек открывается из меню.
     @Published var hideFromDock: Bool = false
 
-    // Security-scoped bookmark to the user-selected target file. Persisted; used
-    // to regain access to the file across launches under App Sandbox. Not shown
-    // in the UI directly (the readable path lives in `filePath`).
+    // Security-scoped bookmark to the user-selected Claude target file. Persisted;
+    // used to regain access to the file across launches under App Sandbox. Not
+    // shown in the UI directly (the readable path lives in `filePath`).
     private var fileBookmark: Data?
+    // Security-scoped bookmark to the user-selected Codex target file (auth.json).
+    private var codexFileBookmark: Data?
 
     // Transient runtime state (not persisted)
     @Published var isRunning: Bool = false
@@ -56,6 +64,10 @@ final class AppStore: ObservableObject {
         var proxiesEnabled: Bool?
         var filePath: String
         var fileBookmark: Data?
+        var claudeEnabled: Bool?
+        var codexFilePath: String?
+        var codexFileBookmark: Data?
+        var codexEnabled: Bool?
         var intervalMinutes: Int
         var startOnLaunch: Bool
         var currentKeyID: UUID?
@@ -88,6 +100,10 @@ final class AppStore: ObservableObject {
         proxiesEnabled = config.proxiesEnabled ?? true
         filePath = config.filePath
         fileBookmark = config.fileBookmark
+        claudeEnabled = config.claudeEnabled ?? true
+        codexFilePath = config.codexFilePath ?? ""
+        codexFileBookmark = config.codexFileBookmark
+        codexEnabled = config.codexEnabled ?? false
         intervalMinutes = max(1, config.intervalMinutes)
         startOnLaunch = config.startOnLaunch
         language = config.language ?? .systemDefault
@@ -105,6 +121,10 @@ final class AppStore: ObservableObject {
                             proxiesEnabled: proxiesEnabled,
                             filePath: filePath,
                             fileBookmark: fileBookmark,
+                            claudeEnabled: claudeEnabled,
+                            codexFilePath: codexFilePath,
+                            codexFileBookmark: codexFileBookmark,
+                            codexEnabled: codexEnabled,
                             intervalMinutes: intervalMinutes,
                             startOnLaunch: startOnLaunch,
                             currentKeyID: currentKeyID,
@@ -119,15 +139,20 @@ final class AppStore: ObservableObject {
     // MARK: - Target file access (App Sandbox)
 
     var hasTargetFile: Bool { fileBookmark != nil }
+    var hasCodexFile: Bool { codexFileBookmark != nil }
 
-    /// Stores a security-scoped bookmark for the user-selected target file so the
-    /// app can keep accessing it across launches under App Sandbox.
+    /// Есть ли хотя бы одна включённая и выбранная цель для записи ключа.
+    var hasAnyActiveTarget: Bool {
+        (claudeEnabled && hasTargetFile) || (codexEnabled && hasCodexFile)
+    }
+
+    /// Stores a security-scoped bookmark for the user-selected Claude target file
+    /// so the app can keep accessing it across launches under App Sandbox.
     func setTargetFile(_ url: URL) {
         do {
-            let bookmark = try url.bookmarkData(options: [.withSecurityScope],
+            fileBookmark = try url.bookmarkData(options: [.withSecurityScope],
                                                 includingResourceValuesForKeys: nil,
                                                 relativeTo: nil)
-            fileBookmark = bookmark
             filePath = url.path
             lastError = nil
             save()
@@ -136,10 +161,45 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Resolves the bookmark, opens security-scoped access, runs `body` with the
-    /// resolved URL, then releases access. Refreshes a stale bookmark in place.
+    /// Stores a security-scoped bookmark for the user-selected Codex target file.
+    func setCodexFile(_ url: URL) {
+        do {
+            codexFileBookmark = try url.bookmarkData(options: [.withSecurityScope],
+                                                     includingResourceValuesForKeys: nil,
+                                                     relativeTo: nil)
+            codexFilePath = url.path
+            lastError = nil
+            save()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    /// Resolves the Claude bookmark, opens security-scoped access, runs `body`,
+    /// then releases access. Refreshes a stale bookmark in place.
     func withTargetAccess<T>(_ body: (URL) throws -> T) throws -> T {
-        guard let bookmark = fileBookmark else { throw RotationError.noFileSelected }
+        try withAccess(fileBookmark) { fresh, path in
+            self.fileBookmark = fresh
+            self.filePath = path
+        } body: { try body($0) }
+    }
+
+    /// Resolves the Codex bookmark, opens security-scoped access, runs `body`,
+    /// then releases access. Refreshes a stale bookmark in place.
+    func withCodexAccess<T>(_ body: (URL) throws -> T) throws -> T {
+        try withAccess(codexFileBookmark) { fresh, path in
+            self.codexFileBookmark = fresh
+            self.codexFilePath = path
+        } body: { try body($0) }
+    }
+
+    /// Общая логика доступа к security-scoped файлу: резолвит bookmark, открывает
+    /// доступ, выполняет `body`, освобождает доступ. Устаревший bookmark обновляет
+    /// через `refresh(freshBookmark, path)`.
+    private func withAccess<T>(_ bookmark: Data?,
+                               refresh: (Data, String) -> Void,
+                               body: (URL) throws -> T) throws -> T {
+        guard let bookmark else { throw RotationError.noFileSelected }
 
         var stale = false
         let url: URL
@@ -161,8 +221,7 @@ final class AppStore: ObservableObject {
            let fresh = try? url.bookmarkData(options: [.withSecurityScope],
                                              includingResourceValuesForKeys: nil,
                                              relativeTo: nil) {
-            fileBookmark = fresh
-            filePath = url.path
+            refresh(fresh, url.path)
             save()
         }
 
@@ -369,6 +428,10 @@ final class AppStore: ObservableObject {
         hideFromDock = false
         fileBookmark = nil
         filePath = ""
+        claudeEnabled = true
+        codexFileBookmark = nil
+        codexFilePath = ""
+        codexEnabled = false
         currentKeyID = nil
         testStates = [:]
         proxyTestStates = [:]

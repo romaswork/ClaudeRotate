@@ -78,6 +78,29 @@ func writeKey(_ key: APIKey, proxy: Proxy?, to url: URL) throws {
     try Data(text.utf8).write(to: url)
 }
 
+/// Reads the Codex `auth.json` file, mutates only `OPENAI_API_KEY`, then writes it
+/// back. All other keys and values are preserved. `url` must already be a resolved,
+/// security-scoped URL with access open (see `AppStore.withCodexAccess`). The write
+/// is NOT atomic for the same reason as `writeKey`.
+func writeCodexKey(_ key: APIKey, to url: URL) throws {
+    guard FileManager.default.fileExists(atPath: url.path) else {
+        throw RotationError.fileNotFound(url.path)
+    }
+
+    let data = try Data(contentsOf: url)
+    let parsed = try? JSONSerialization.jsonObject(with: data, options: [])
+    guard let parsed else { throw RotationError.invalidJSON(url.path) }
+    guard var root = parsed as? [String: Any] else { throw RotationError.rootNotObject }
+
+    root["OPENAI_API_KEY"] = key.apiKey
+
+    let output = try JSONSerialization.data(withJSONObject: root,
+                                            options: [.prettyPrinted, .sortedKeys])
+    let text = String(decoding: output, as: UTF8.self)
+        .replacingOccurrences(of: "\\/", with: "/")
+    try Data(text.utf8).write(to: url)
+}
+
 @MainActor
 final class RotationManager: ObservableObject {
     nonisolated let objectWillChange = ObservableObjectPublisher()
@@ -126,20 +149,55 @@ final class RotationManager: ObservableObject {
         if store.isRunning { start() }
     }
 
-    /// Writes a specific key to the target file immediately and marks it active.
+    /// Writes `key` to every enabled+selected target file (Claude settings.json
+    /// and/or Codex auth.json). Sets `store.lastError` to nil on full success, or
+    /// to the collected failure text otherwise. Returns true if the key was written
+    /// to at least one target (so callers can mark it active even on a partial
+    /// failure). If no target is enabled+selected, sets `noFileSelected` and
+    /// returns false.
+    private func performWrite(_ key: APIKey) -> Bool {
+        guard store.hasAnyActiveTarget else {
+            store.lastError = RotationError.noFileSelected.localizedDescription
+            return false
+        }
+
+        var wroteAny = false
+        var errors: [String] = []
+
+        if store.claudeEnabled && store.hasTargetFile {
+            do {
+                try store.withTargetAccess { url in
+                    try writeKey(key, proxy: store.proxy(for: key), to: url)
+                }
+                wroteAny = true
+            } catch {
+                errors.append(error.localizedDescription)
+            }
+        }
+
+        if store.codexEnabled && store.hasCodexFile {
+            do {
+                try store.withCodexAccess { url in
+                    try writeCodexKey(key, to: url)
+                }
+                wroteAny = true
+            } catch {
+                errors.append(error.localizedDescription)
+            }
+        }
+
+        store.lastError = errors.isEmpty ? nil : errors.joined(separator: "\n")
+        return wroteAny
+    }
+
+    /// Writes a specific key to the target files immediately and marks it active.
     /// Works regardless of whether rotation is running or paused; does not touch
     /// the timer. If rotation is running, the next tick continues after this key.
     func apply(_ key: APIKey) {
-        do {
-            try store.withTargetAccess { url in
-                try writeKey(key, proxy: store.proxy(for: key), to: url)
-            }
+        if performWrite(key) {
             store.currentKeyID = key.id
             store.lastRotation = Date()
-            store.lastError = nil
             store.save()
-        } catch {
-            store.lastError = error.localizedDescription
         }
     }
 
@@ -171,16 +229,10 @@ final class RotationManager: ObservableObject {
         }
         let key = enabled[index]
 
-        do {
-            try store.withTargetAccess { url in
-                try writeKey(key, proxy: store.proxy(for: key), to: url)
-            }
+        if performWrite(key) {
             store.currentKeyID = key.id
             store.lastRotation = Date()
-            store.lastError = nil
             store.save()
-        } catch {
-            store.lastError = error.localizedDescription
         }
     }
 }
