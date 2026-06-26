@@ -513,12 +513,14 @@ struct KeysView: View {
     @State private var search = ""
     @State private var keyToDelete: APIKey?
 
-    // Ключи, отфильтрованные строкой поиска (по имени и base URL).
+    // Ключи, отфильтрованные строкой поиска (по имени, base URL и самому ключу).
     private var filteredKeys: [APIKey] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return store.keys }
         return store.keys.filter {
-            $0.name.lowercased().contains(q) || $0.baseURL.lowercased().contains(q)
+            $0.name.lowercased().contains(q)
+                || $0.baseURL.lowercased().contains(q)
+                || $0.apiKey.lowercased().contains(q)
         }
     }
 
@@ -703,12 +705,14 @@ struct KeyRow: View {
     let onDelete: () -> Void
 
     @State private var hovering = false
+    @State private var copiedKey = false
+    @State private var copiedProxy = false
 
     var body: some View {
         HStack(spacing: 12) {
             statusDot
             VStack(alignment: .leading, spacing: 2) {
-                Text(key.name.isEmpty ? store.tr("Без названия", "Untitled") : key.name)
+                Text(displayName)
                     .fontWeight(.medium)
                 Text(key.baseURL.isEmpty ? store.tr("Нет base URL", "No base URL") : key.baseURL)
                     .font(.caption)
@@ -717,6 +721,9 @@ struct KeyRow: View {
                     .truncationMode(.middle)
             }
             Spacer()
+            if let suffix = keySuffix {
+                keySuffixChip(suffix)
+            }
             if let proxy = store.assignedProxy(for: key) {
                 proxyChip(proxy)
             }
@@ -736,6 +743,19 @@ struct KeyRow: View {
         Circle()
             .fill(isActive ? Color.green : (key.enabled ? Color.secondary : Color.secondary.opacity(0.3)))
             .frame(width: 8, height: 8)
+    }
+
+    // Имя ключа, обрезанное до 20 символов (длинные имена не растягивают строку).
+    private var displayName: String {
+        let name = key.name.isEmpty ? store.tr("Без названия", "Untitled") : key.name
+        return name.count > 20 ? String(name.prefix(20)) + "…" : name
+    }
+
+    // Последние 3 символа самого API-ключа (`..Jj4`) для быстрой идентификации.
+    private var keySuffix: String? {
+        let trimmed = key.apiKey.trimmingCharacters(in: .whitespaces)
+        guard trimmed.count >= 3 else { return nil }
+        return ".." + trimmed.suffix(3)
     }
 
     // Кнопки действий, проявляющиеся при наведении на строку. Пространство
@@ -766,20 +786,58 @@ struct KeyRow: View {
     }
 
     // Бейдж с названием привязанного прокси. Когда прокси отключены глобально,
-    // показывается приглушённо с подсказкой, что он не применяется.
+    // показывается приглушённо с подсказкой, что он не применяется. Клик копирует
+    // полную строку прокси (`логин:пароль@host:port`) в буфер обмена.
     private func proxyChip(_ proxy: Proxy) -> some View {
         let active = store.proxiesEnabled
-        return HStack(spacing: 3) {
-            Image(systemName: "network")
-            Text(proxy.displayName)
-                .lineLimit(1)
-                .truncationMode(.middle)
+        let canCopy = proxy.copyString != nil
+        return Button {
+            if let s = proxy.copyString { copy(s, flag: $copiedProxy) }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: copiedProxy ? "checkmark" : "network")
+                Text(proxy.displayName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .tagChip(tint: active ? Color.secondary : Color.secondary.opacity(0.5),
+                     opacity: active ? 0.15 : 0.08)
         }
-        .tagChip(tint: active ? Color.secondary : Color.secondary.opacity(0.5),
-                 opacity: active ? 0.15 : 0.08)
-        .help(active
-              ? store.tr("Прокси: \(proxy.displayName)", "Proxy: \(proxy.displayName)")
-              : store.tr("Прокси отключены глобально в настройках", "Proxies are disabled globally in Settings"))
+        .buttonStyle(.plain)
+        .disabled(!canCopy)
+        .help(copiedProxy
+              ? store.tr("Скопировано", "Copied")
+              : store.tr("Копировать прокси: \(proxy.displayName)", "Copy proxy: \(proxy.displayName)"))
+    }
+
+    // Капсула с последними 3 символами API-ключа (`..Jj4`) с иконкой ключа —
+    // в стиле колонки прокси. Клик копирует полный API-ключ в буфер обмена.
+    private func keySuffixChip(_ suffix: String) -> some View {
+        Button {
+            copy(key.apiKey, flag: $copiedKey)
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: copiedKey ? "checkmark" : "key")
+                Text(suffix)
+                    .font(.caption.monospaced())
+            }
+            .tagChip(tint: Color.secondary, opacity: 0.15)
+        }
+        .buttonStyle(.plain)
+        .help(copiedKey
+              ? store.tr("Скопировано", "Copied")
+              : store.tr("Копировать API-ключ", "Copy API key"))
+    }
+
+    // Копирует строку в буфер обмена и кратко подсвечивает капсулу галочкой.
+    private func copy(_ string: String, flag: Binding<Bool>) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(string, forType: .string)
+        flag.wrappedValue = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            flag.wrappedValue = false
+        }
     }
 
     @ViewBuilder
@@ -959,25 +1017,39 @@ struct SettingsView: View {
                               hasFile: store.hasTargetFile,
                               path: store.filePath,
                               choose: { browse() })
+            } header: {
+                Label(store.tr("Claude Code", "Claude Code"), systemImage: "doc.text")
+            } footer: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(store.tr("Обычно файл находится по адресу:",
+                                  "The file is usually located at:"))
+                    Text("\(defaultSettingsURL.path)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Text(store.tr("Чтобы Claude Code начал использовать новый ключ, обычно не требуется перезагрузка Claude Code.",
+                                  "To make Claude Code use the new key, you usually don't need to restart Claude Code."))
+                }
+            }
+
+            Section {
                 targetFileRow(title: store.tr("Codex (auth.json)", "Codex (auth.json)"),
                               isOn: $store.codexEnabled,
                               hasFile: store.hasCodexFile,
                               path: store.codexFilePath,
                               choose: { browseCodex() })
             } header: {
-                Label(store.tr("Целевые файлы", "Target Files"), systemImage: "doc.text")
+                Label(store.tr("Codex", "Codex"), systemImage: "doc.text")
             } footer: {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(store.tr("Включите цели, в которые при ротации будет записываться текущий ключ. Доступ к выбранным файлам сохраняется между запусками.",
-                                  "Enable the targets the current key is written to on rotation. Access to selected files is preserved across launches."))
-                    Text("\(defaultSettingsURL.path)")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
+                    Text(store.tr("Обычно файл находится по адресу:",
+                                  "The file is usually located at:"))
                     Text("\(defaultCodexURL.path)")
                         .font(.system(.caption2, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                    Text(store.tr("Чтобы Codex начал использовать новый ключ, обычно требуется перезагрузка плагина Codex.",
+                                  "To make Codex use the new key, you usually need to reload the Codex plugin."))
                 }
             }
 

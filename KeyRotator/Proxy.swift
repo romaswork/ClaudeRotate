@@ -51,6 +51,22 @@ struct Proxy: Identifiable, Codable, Equatable {
         return "http://\(authority)\(h)\(portPart)"
     }
 
+    /// Полная строка прокси для копирования в буфер: `[логин:пароль@]host[:port]`
+    /// (без `http://` и без percent-кодирования). Если хост пуст — возвращает nil.
+    var copyString: String? {
+        let h = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !h.isEmpty else { return nil }
+        let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pass = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        var authority = ""
+        if !user.isEmpty {
+            authority = pass.isEmpty ? "\(user)@" : "\(user):\(pass)@"
+        }
+        let p = port.trimmingCharacters(in: .whitespacesAndNewlines)
+        let portPart = p.isEmpty ? "" : ":\(p)"
+        return "\(authority)\(h)\(portPart)"
+    }
+
     /// Человекочитаемое имя для списков и подписей.
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
