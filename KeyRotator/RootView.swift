@@ -721,12 +721,24 @@ struct KeyRow: View {
                     .truncationMode(.middle)
             }
             Spacer()
-            if let suffix = keySuffix {
-                keySuffixChip(suffix)
+            // Две «колонки»-капсулы с фиксированной шириной: у всех строк
+            // капсула ключа и капсула прокси выровнены по общим вертикалям.
+            Group {
+                if let suffix = keySuffix {
+                    keySuffixChip(suffix)
+                } else {
+                    Color.clear
+                }
             }
-            if let proxy = store.assignedProxy(for: key) {
-                proxyChip(proxy)
+            .frame(width: 70, alignment: .leading)
+            Group {
+                if let proxy = store.assignedProxy(for: key) {
+                    proxyChip(proxy)
+                } else {
+                    noProxyChip
+                }
             }
+            .frame(width: 140, alignment: .leading)
             testIndicator
             hoverActions
             Toggle("", isOn: $key.enabled)
@@ -808,6 +820,20 @@ struct KeyRow: View {
         .help(copiedProxy
               ? store.tr("Скопировано", "Copied")
               : store.tr("Копировать прокси: \(proxy.displayName)", "Copy proxy: \(proxy.displayName)"))
+    }
+
+    // Плейсхолдер на месте капсулы прокси, когда ключу не назначен прокси.
+    // Делает строку визуально однородной с остальными (та же высота/положение
+    // капсулы), но приглушённо и без действия по клику.
+    private var noProxyChip: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "network.slash")
+            Text(store.tr("Нет", "None"))
+                .lineLimit(1)
+        }
+        .tagChip(tint: Color.secondary.opacity(0.5), opacity: 0.08)
+        .foregroundStyle(.secondary)
+        .help(store.tr("Прокси не назначен", "No proxy assigned"))
     }
 
     // Капсула с последними 3 символами API-ключа (`..Jj4`) с иконкой ключа —
