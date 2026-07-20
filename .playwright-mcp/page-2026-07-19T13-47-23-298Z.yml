@@ -1,0 +1,79 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - link [ref=e5] [cursor=pointer]:
+      - /url: /
+      - generic [ref=e9]:
+        - text: Free
+        - emphasis [ref=e10]: Model
+    - generic [ref=e11]:
+      - generic [ref=e12]: Рабочая область
+      - button "Главная" [ref=e13] [cursor=pointer]
+      - button "Ключи API" [ref=e18] [cursor=pointer]
+      - button "Использование" [ref=e22] [cursor=pointer]
+      - button "Журналы" [ref=e26] [cursor=pointer]
+      - button "Биллинг" [ref=e30] [cursor=pointer]
+    - generic [ref=e33]:
+      - generic [ref=e34]: Аккаунт
+      - button "Приглашайте и зарабатывайте" [ref=e35] [cursor=pointer]
+      - button "Партнёр" [ref=e38] [cursor=pointer]
+      - button "Профиль" [ref=e42] [cursor=pointer]
+      - button "Документация" [ref=e46] [cursor=pointer]
+      - button "Поддержка" [ref=e51] [cursor=pointer]
+    - button "P pn1 Подтверждённый аккаунт pn1@baliop.com" [ref=e56] [cursor=pointer]:
+      - generic [ref=e57]: P
+      - generic [ref=e58]:
+        - generic [ref=e59]:
+          - generic [ref=e60]: pn1
+          - generic "Подтверждённый аккаунт" [ref=e61]
+        - generic [ref=e64]: pn1@baliop.com
+  - main [ref=e67]:
+    - generic [ref=e68]:
+      - generic [ref=e70]:
+        - generic [ref=e71]: § Использование
+        - heading [level=1] [ref=e72]:
+          - text: Лимиты использования
+          - emphasis [ref=e73]: тарифа
+        - paragraph [ref=e74]: Вы на Бесплатном тарифе. Оформите подписку, чтобы разблокировать окна лимитов запросов и большую ёмкость.
+      - generic [ref=e75]:
+        - generic [ref=e76]:
+          - generic [ref=e77]: Доступно сейчас
+          - generic [ref=e78]: $0.00
+        - generic [ref=e80]:
+          - text: Бонусные кредиты
+          - strong [ref=e81]: $0.00
+      - generic [ref=e91]:
+        - generic [ref=e92]: Нет активных лимитов
+        - generic [ref=e93]: Оформите подписку, чтобы разблокировать окна лимитов запросов и большую ёмкость.
+      - generic [ref=e94]:
+        - generic [ref=e95]: § Дополнительное использование
+        - generic [ref=e96]: Бонусные кредиты API за регистрацию и приглашения. Применяются автоматически до кредитов тарифа.
+      - generic [ref=e98]:
+        - generic [ref=e99]:
+          - generic [ref=e100]: Текущий баланс
+          - generic [ref=e101]: Получайте $20 за каждого друга, который пополнит счёт
+        - generic [ref=e104]: Кредиты пока не получены
+      - generic [ref=e106]:
+        - generic [ref=e107]:
+          - generic [ref=e108]: § Пополнение
+          - heading [level=3] [ref=e109]:
+            - text: Купить
+            - emphasis [ref=e110]: кредиты
+          - paragraph [ref=e111]: Приобретите дополнительные кредиты API. Применяются автоматически при каждом запросе.
+        - generic [ref=e112]:
+          - generic [ref=e113]:
+            - generic [ref=e114]: $
+            - spinbutton "напр. 30" [ref=e115]
+          - generic [ref=e116]: "Вы можете пополнить ещё до $1000.00 (лимит баланса: $1000)"
+          - generic [ref=e117]:
+            - button "支付宝" [disabled]
+            - button "微信" [disabled]
+            - button "Оплатить криптовалютой" [disabled]
+      - generic [ref=e118]:
+        - generic [ref=e119]:
+          - generic [ref=e120]: Как заработать больше
+          - heading [level=3] [ref=e121]:
+            - text: Приглашайте друзей, получайте
+            - emphasis [ref=e122]: $10
+            - text: за каждого
+          - paragraph [ref=e123]: Дополнительное использование начисляется за каждого друга, который сделает первое пополнение по вашей реферальной ссылке. Он тоже получает $20 кредитов. Без лимита и срока действия.
+        - button "Пригласить друзей" [ref=e124] [cursor=pointer]

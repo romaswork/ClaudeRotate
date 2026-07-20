@@ -1,0 +1,2 @@
+[  142599ms] [ERROR] Access to fetch at 'https://hm.baidu.com/hm.js?8737ea2661f927042eb1143caec5ae2e' from origin 'https://freemodel.dev' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ https://freemodel.dev/dashboard/usage:0
+[  142599ms] [ERROR] Failed to load resource: net::ERR_FAILED @ https://hm.baidu.com/hm.js?8737ea2661f927042eb1143caec5ae2e:0

@@ -1,0 +1,183 @@
+- generic [ref=e2]:
+  - banner [ref=e3]:
+    - generic [ref=e4]:
+      - link [ref=e5] [cursor=pointer]:
+        - /url: "#"
+        - generic [ref=e9]:
+          - emphasis [ref=e10]: Free
+          - text: Model
+      - navigation [ref=e11]:
+        - link "How it works" [ref=e12] [cursor=pointer]:
+          - /url: "#how"
+        - link "Models" [ref=e13] [cursor=pointer]:
+          - /url: "#models"
+        - link "FAQ" [ref=e14] [cursor=pointer]:
+          - /url: "#faq"
+      - generic [ref=e15]:
+        - button "Войти" [ref=e16] [cursor=pointer]
+        - button "Попробовать FreeModel →" [ref=e17] [cursor=pointer]
+  - generic [ref=e18]:
+    - generic [ref=e19]:
+      - generic [ref=e20]: Подтвердите аккаунт · 30 дней Pro бесплатно
+      - heading [level=1] [ref=e21]:
+        - text: Передовой ИИ, бесплатно
+        - emphasis [ref=e22]: на 30 дней
+        - text: после подтверждения.
+      - paragraph [ref=e23]: Зарегистрируйтесь, подтвердите новый аккаунт и получите 30 дней Pro бесплатно. Доступ к нашим новейшим моделям через один простой API.
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - generic [ref=e26]: 30 дней
+          - text: Pro бесплатно после подтверждения
+        - generic [ref=e27]:
+          - generic [ref=e28]: Передовые
+          - text: Новейшие модели ИИ
+        - generic [ref=e29]:
+          - generic [ref=e30]: "1"
+          - text: API, совместимый с OpenAI
+    - complementary [ref=e31]:
+      - generic [ref=e32]:
+        - heading "Вход в FreeModel" [level=2] [ref=e34]
+        - link "Продолжить с Google" [ref=e35] [cursor=pointer]:
+          - /url: /api/auth/google/redirect
+        - generic [ref=e41]: или
+        - generic [ref=e43]:
+          - generic [ref=e44]:
+            - generic [ref=e45]: Адрес электронной почты
+            - textbox "Адрес электронной почты" [ref=e46]:
+              - /placeholder: you@company.com
+          - button "Отправить код подтверждения" [ref=e47] [cursor=pointer]
+        - paragraph [ref=e48]:
+          - text: Продолжая, вы соглашаетесь с нашими
+          - link "Условиями" [ref=e49] [cursor=pointer]:
+            - /url: /terms
+          - text: и
+          - link "Политикой конфиденциальности" [ref=e50] [cursor=pointer]:
+            - /url: /privacy
+          - text: .
+  - generic [ref=e52]:
+    - text: What is FreeModel
+    - heading "A multi-model gateway, delivered as one API." [level=2] [ref=e53]
+    - paragraph [ref=e54]: Instead of committing to a single vendor, FreeModel sits in front of a pool of the strongest open models and routes every request to the one most likely to nail it. You call one endpoint — in either the OpenAI or the Anthropic format — and we handle model selection, switching, and fallback underneath.
+    - img "FreeModel routes each request across a pool of open models — DeepSeek, GLM, Qwen, MiniMax, Kimi, Llama — and can recursively call itself." [ref=e55]:
+      - img [ref=e56]:
+        - generic [ref=e57]: FreeModel
+        - generic [ref=e70]: DeepSeek
+        - generic [ref=e76]: GLM
+        - generic [ref=e82]: Qwen
+        - generic [ref=e88]: MiniMax
+        - generic [ref=e94]: Kimi
+        - generic [ref=e100]: Llama
+        - generic [ref=e111]: Open models
+        - generic [ref=e112]: FreeModel
+        - generic [ref=e113]: Model Pool
+  - generic [ref=e115]:
+    - generic [ref=e116]:
+      - heading [level=2] [ref=e117]:
+        - text: Всё, что вам нужно.
+        - emphasis [ref=e118]: Бесплатно на 30 дней.
+      - paragraph [ref=e119]: Подтвердите новый аккаунт и получите 30 дней Pro бесплатно.
+    - generic [ref=e120]:
+      - generic [ref=e121]:
+        - heading "30 дней Pro бесплатно" [level=3] [ref=e126]
+        - paragraph [ref=e127]: Подтвердите новый аккаунт и получите 30 дней Pro бесплатно — без платёжных данных. Начните создавать прямо сейчас.
+      - generic [ref=e128]:
+        - heading "Передовые модели" [level=3] [ref=e134]
+        - paragraph [ref=e135]: Доступ к нашим новейшим моделям через один понятный и простой API.
+      - generic [ref=e136]:
+        - heading "Совместимость с OpenAI" [level=3] [ref=e141]
+        - paragraph [ref=e142]: Полная замена API OpenAI. Работает со всеми SDK и инструментами, которыми вы уже пользуетесь.
+  - generic [ref=e144]:
+    - generic [ref=e145]:
+      - text: How it works
+      - heading "Live in three steps." [level=2] [ref=e146]
+      - paragraph [ref=e147]: Point your existing OpenAI SDK at FreeModel and you're done.
+    - generic [ref=e148]:
+      - generic [ref=e149]:
+        - generic [ref=e150]:
+          - generic [ref=e151]: "01"
+          - generic [ref=e152]:
+            - heading "Create an account" [level=3] [ref=e153]
+            - paragraph [ref=e154]: Sign up and verify — your first API credits land instantly, no card required.
+        - generic [ref=e155]:
+          - generic [ref=e156]: "02"
+          - generic [ref=e157]:
+            - heading "Grab your API key" [level=3] [ref=e158]
+            - paragraph [ref=e159]: Generate a key from the dashboard. One key unlocks every model on the network.
+        - generic [ref=e160]:
+          - generic [ref=e161]: "03"
+          - generic [ref=e162]:
+            - heading "Change one line" [level=3] [ref=e163]
+            - paragraph [ref=e164]: Swap your base URL to FreeModel. Every SDK and tool you already use keeps working.
+      - generic [ref=e165]: "from openai import OpenAI client = OpenAI( base_url=\"https://api.freemodel.dev/v1\", api_key=\"fe_oa_••••••••••••\", ) resp = client.chat.completions.create( model=\"auto\", # let FreeModel route messages=[{\"role\": \"user\", \"content\": \"Ship it.\"}], )"
+  - generic [ref=e167]:
+    - generic [ref=e168]:
+      - text: Two API surfaces
+      - heading "Speaks the formats you already use." [level=2] [ref=e169]
+      - paragraph [ref=e170]: Call FreeModel in the OpenAI or the Anthropic format — no rewrites, no adapters.
+    - generic [ref=e171]:
+      - generic [ref=e172]:
+        - generic [ref=e173]:
+          - generic [ref=e174]: OpenAI
+          - generic [ref=e175]: compatible
+        - list [ref=e176]:
+          - listitem [ref=e177]:
+            - code [ref=e178]: POST /v1/responses
+          - listitem [ref=e179]:
+            - code [ref=e180]: POST /v1/chat/completions
+      - generic [ref=e181]:
+        - generic [ref=e182]:
+          - generic [ref=e183]: Anthropic
+          - generic [ref=e184]: compatible
+        - list [ref=e185]:
+          - listitem [ref=e186]:
+            - code [ref=e187]: POST /v1/messages
+    - paragraph [ref=e188]: One key, one base URL. Point your existing SDK at FreeModel and keep shipping.
+  - generic [ref=e190]:
+    - generic [ref=e191]:
+      - text: FAQ
+      - heading "Questions, answered." [level=2] [ref=e192]
+    - generic [ref=e193]:
+      - generic [ref=e194]:
+        - heading "Which API formats are supported?" [level=3] [ref=e195]
+        - paragraph [ref=e196]: Both. FreeModel speaks the OpenAI format (v1/responses and v1/chat/completions) and the Anthropic format (v1/messages). Keep your existing SDK — change only the base URL and key.
+      - generic [ref=e197]:
+        - heading "Which models does it route across?" [level=3] [ref=e198]
+        - paragraph [ref=e199]: A curated pool of the strongest open models. FreeModel picks the best fit per task, and the pool expands as new open models land.
+      - generic [ref=e200]:
+        - heading "How does routing work?" [level=3] [ref=e201]
+        - paragraph [ref=e202]: Call a specific model, or let FreeModel pick the best fit for the task. If a model is throttled or down, requests fall back automatically.
+      - generic [ref=e203]:
+        - heading "Do I need a credit card to start?" [level=3] [ref=e204]
+        - paragraph [ref=e205]: No. Verify your account and you get free API credits to start building immediately.
+      - generic [ref=e206]:
+        - heading "Can I exclude certain providers?" [level=3] [ref=e207]
+        - paragraph [ref=e208]: Yes. Pin or exclude specific providers and models at any time, for compliance or preference.
+  - generic [ref=e210]:
+    - heading "Ready to build with FreeModel?" [level=2] [ref=e211]
+    - paragraph [ref=e212]: One API. Every frontier model. Start free in under a minute.
+    - button "Start free →" [ref=e213] [cursor=pointer]
+  - contentinfo [ref=e214]:
+    - generic [ref=e215]:
+      - generic [ref=e216]:
+        - link [ref=e217] [cursor=pointer]:
+          - /url: "#"
+          - generic [ref=e221]:
+            - emphasis [ref=e222]: Free
+            - text: Model
+        - paragraph [ref=e223]: Новейшие модели. Подтвердите аккаунт и получите 30 дней Pro бесплатно.
+      - generic [ref=e224]:
+        - heading "Продукт" [level=4] [ref=e225]
+        - list [ref=e226]:
+          - listitem [ref=e227]:
+            - link "Возможности" [ref=e228] [cursor=pointer]:
+              - /url: "#features"
+      - generic [ref=e229]:
+        - heading "Правовая информация" [level=4] [ref=e230]
+        - list [ref=e231]:
+          - listitem [ref=e232]:
+            - link "Политика конфиденциальности" [ref=e233] [cursor=pointer]:
+              - /url: /privacy
+          - listitem [ref=e234]:
+            - link "Условия использования" [ref=e235] [cursor=pointer]:
+              - /url: /terms
+    - generic [ref=e236]: © 2026 freemodel.dev — Все права защищены.

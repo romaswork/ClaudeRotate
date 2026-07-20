@@ -14,6 +14,9 @@ final class AppStore: ObservableObject {
     // written to disk on every change. Persistence happens explicitly via save()
     // on focus change, discrete actions, the "Save" button, and app backgrounding.
     @Published var keys: [APIKey] = []
+    // Общий Base URL для ключей категории FreeModel. Применяется к ключу этой
+    // категории, если у него не задан собственный baseURL (см. effectiveBaseURL).
+    @Published var freeModelBaseURL: String = ""
     @Published var proxies: [Proxy] = []
     // Глобальный переключатель прокси. Когда выключен, ротация игнорирует прокси,
     // привязанные к ключам (переменные HTTPS_PROXY/HTTP_PROXY удаляются из файла),
@@ -35,6 +38,34 @@ final class AppStore: ObservableObject {
     // как accessory (только значок в меню-баре); окно настроек открывается из меню.
     @Published var hideFromDock: Bool = false
 
+    // MARK: Настройки категории FreeModel (персистятся, вкладка «FreeModel» в настройках)
+
+    // Фоновое автообновление лимитов (таймер-тикер). Когда выключено, лимиты
+    // обновляются только вручную и при входе в раздел FreeModel.
+    @Published var freeModelAutoRefresh: Bool = true
+    // Интервал автообновления аккаунта активного ключа, минуты.
+    @Published var freeModelActiveRefreshMinutes: Int = 2
+    // Интервал автообновления остальных аккаунтов, минуты.
+    @Published var freeModelOthersRefreshMinutes: Int = 15
+    // Пауза между аккаунтами при последовательном «Обновить все», секунды.
+    @Published var freeModelSequentialPauseSeconds: Int = 3
+    // Автопереключение на верхний ключ таблицы FreeModel при исчерпании
+    // любого из окон лимитов (5 ч или 7 дн) активного ключа.
+    @Published var freeModelAutoSwitch: Bool = true
+    // Порог «исчерпания» окна лимитов в процентах: детект перехода через
+    // него запускает звук и автопереключение (по умолчанию 100%).
+    @Published var freeModelSwitchThresholdPercent: Int = 100
+    // Играть системный звук при исчерпании окна активного ключа.
+    @Published var freeModelSoundEnabled: Bool = true
+    // Имя системного звука (`NSSound(named:)`); при недоступности — beep.
+    @Published var freeModelSoundName: String = "Glass"
+    // Показывать в меню-баре кастомную иконку с процентом 5-часового окна
+    // активного FreeModel-ключа (вместо системного символа).
+    @Published var freeModelMenuBarIcon: Bool = true
+    // Автосортировка списка FreeModel по лимитам. Когда выключено, порядок
+    // ручной (как у обычных ключей, с перетаскиванием).
+    @Published var freeModelAutoSort: Bool = true
+
     // Security-scoped bookmark to the user-selected Claude target file. Persisted;
     // used to regain access to the file across launches under App Sandbox. Not
     // shown in the UI directly (the readable path lives in `filePath`).
@@ -54,12 +85,28 @@ final class AppStore: ObservableObject {
     // Transient per-proxy validation results (not persisted)
     @Published var proxyTestStates: [UUID: ProxyTestState] = [:]
 
+    // Transient per-key FreeModel account limits (окна 5 ч / 7 дн); not persisted.
+    @Published var usageStates: [UUID: FreeModelUsageState] = [:]
+    // Идёт ли последовательное обновление всех аккаунтов (кнопка «Обновить все»).
+    @Published var usageRefreshingAll = false
+    // Вызывается, когда любое окно лимитов (5 ч или 7 дн) активного
+    // FreeModel-ключа дошло до порога (см. performUsageFetch). RotationManager
+    // подставляет сюда переключение на верхний ключ таблицы FreeModel
+    // (порядок displayedFreeModelKeys). Транзиентно, не персистится.
+    var onActiveKeyExhausted: (() -> Void)?
+    // Токены, по которым запрос уже выполняется (защита от дублей).
+    private var usageTokensInFlight: Set<String> = []
+    // Когда токен опрашивался в последний раз (для minInterval).
+    private var usageFetchedAt: [String: Date] = [:]
+    private var usageTimer: Timer?
+
     private var isLoading = false
 
     // MARK: - Persistence
 
     private struct Config: Codable {
         var keys: [APIKey]
+        var freeModelBaseURL: String?
         var proxies: [Proxy]?
         var proxiesEnabled: Bool?
         var filePath: String
@@ -73,6 +120,16 @@ final class AppStore: ObservableObject {
         var currentKeyID: UUID?
         var language: AppLanguage?
         var hideFromDock: Bool?
+        var freeModelAutoRefresh: Bool?
+        var freeModelActiveRefreshMinutes: Int?
+        var freeModelOthersRefreshMinutes: Int?
+        var freeModelSequentialPauseSeconds: Int?
+        var freeModelAutoSwitch: Bool?
+        var freeModelSwitchThresholdPercent: Int?
+        var freeModelSoundEnabled: Bool?
+        var freeModelSoundName: String?
+        var freeModelMenuBarIcon: Bool?
+        var freeModelAutoSort: Bool?
     }
 
     private static var configURL: URL {
@@ -86,6 +143,7 @@ final class AppStore: ObservableObject {
 
     init() {
         load()
+        startUsageAutoRefresh()
     }
 
     private func load() {
@@ -96,6 +154,7 @@ final class AppStore: ObservableObject {
             return
         }
         keys = config.keys
+        freeModelBaseURL = config.freeModelBaseURL ?? ""
         proxies = config.proxies ?? []
         proxiesEnabled = config.proxiesEnabled ?? true
         filePath = config.filePath
@@ -108,6 +167,16 @@ final class AppStore: ObservableObject {
         startOnLaunch = config.startOnLaunch
         language = config.language ?? .systemDefault
         hideFromDock = config.hideFromDock ?? false
+        freeModelAutoRefresh = config.freeModelAutoRefresh ?? true
+        freeModelActiveRefreshMinutes = max(1, config.freeModelActiveRefreshMinutes ?? 2)
+        freeModelOthersRefreshMinutes = max(1, config.freeModelOthersRefreshMinutes ?? 15)
+        freeModelSequentialPauseSeconds = max(0, config.freeModelSequentialPauseSeconds ?? 3)
+        freeModelAutoSwitch = config.freeModelAutoSwitch ?? true
+        freeModelSwitchThresholdPercent = min(max(config.freeModelSwitchThresholdPercent ?? 100, 50), 100)
+        freeModelSoundEnabled = config.freeModelSoundEnabled ?? true
+        freeModelSoundName = config.freeModelSoundName ?? "Glass"
+        freeModelMenuBarIcon = config.freeModelMenuBarIcon ?? true
+        freeModelAutoSort = config.freeModelAutoSort ?? true
         // Restore the last active key only if it still exists.
         if let id = config.currentKeyID, keys.contains(where: { $0.id == id }) {
             currentKeyID = id
@@ -117,6 +186,7 @@ final class AppStore: ObservableObject {
     func save() {
         guard !isLoading else { return }
         let config = Config(keys: keys,
+                            freeModelBaseURL: freeModelBaseURL,
                             proxies: proxies,
                             proxiesEnabled: proxiesEnabled,
                             filePath: filePath,
@@ -129,7 +199,17 @@ final class AppStore: ObservableObject {
                             startOnLaunch: startOnLaunch,
                             currentKeyID: currentKeyID,
                             language: language,
-                            hideFromDock: hideFromDock)
+                            hideFromDock: hideFromDock,
+                            freeModelAutoRefresh: freeModelAutoRefresh,
+                            freeModelActiveRefreshMinutes: freeModelActiveRefreshMinutes,
+                            freeModelOthersRefreshMinutes: freeModelOthersRefreshMinutes,
+                            freeModelSequentialPauseSeconds: freeModelSequentialPauseSeconds,
+                            freeModelAutoSwitch: freeModelAutoSwitch,
+                            freeModelSwitchThresholdPercent: freeModelSwitchThresholdPercent,
+                            freeModelSoundEnabled: freeModelSoundEnabled,
+                            freeModelSoundName: freeModelSoundName,
+                            freeModelMenuBarIcon: freeModelMenuBarIcon,
+                            freeModelAutoSort: freeModelAutoSort)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(config) else { return }
@@ -238,17 +318,24 @@ final class AppStore: ObservableObject {
     func add(_ key: APIKey) {
         keys.append(key)
         save()
+        if key.category == .freeModel { refreshUsage(for: key) }
     }
 
     func updateKey(_ key: APIKey) {
         guard let idx = keys.firstIndex(where: { $0.id == key.id }) else { return }
+        let tokenChanged = keys[idx].usageToken != key.usageToken
         keys[idx] = key
         save()
+        // Подтянуть лимиты, если токен появился/сменился или данных ещё нет.
+        if key.category == .freeModel, tokenChanged || usageStates[key.id] == nil {
+            refreshUsage(for: key)
+        }
     }
 
     func deleteKey(_ key: APIKey) {
         keys.removeAll { $0.id == key.id }
         if currentKeyID == key.id { currentKeyID = nil }
+        usageStates.removeValue(forKey: key.id)
         save()
     }
 
@@ -264,6 +351,238 @@ final class AppStore: ObservableObject {
     func move(from source: IndexSet, to destination: Int) {
         keys.move(fromOffsets: source, toOffset: destination)
         save()
+    }
+
+    // MARK: - Categories (FreeModel)
+
+    /// Ключи одной категории в порядке их следования в общем списке.
+    func keys(in category: KeyCategory) -> [APIKey] {
+        keys.filter { $0.category == category }
+    }
+
+    /// FreeModel-ключи в порядке отображения в таблице: сначала по заполнению
+    /// 5-часового окна (0% → 100%), при равенстве — по моменту сброса
+    /// 7-дневного окна (чей сброс раньше, тот выше); ключи без загруженных
+    /// лимитов — после них в исходном порядке, а полностью исчерпанные
+    /// (любое окно на 100%) — в самом конце (тай-брейк по исходному индексу
+    /// делает сортировку стабильной).
+    func sortedFreeModelKeys() -> [APIKey] {
+        // Ранг группы: 0 — рабочие с данными, 1 — без данных, 2 — полностью
+        // исчерпанные (любое окно ≥ 100%, независимо от порога переключения).
+        func rank(_ usage: FreeModelUsage?) -> Int {
+            guard let usage else { return 1 }
+            return usage.window5h.fraction >= 1 || usage.windowWeek.fraction >= 1 ? 2 : 0
+        }
+        return keys(in: .freeModel).enumerated().sorted { a, b in
+            let ua = usageStates[a.element.id]?.usage
+            let ub = usageStates[b.element.id]?.usage
+            let ra = rank(ua), rb = rank(ub)
+            if ra != rb { return ra < rb }
+            if let ua, let ub {
+                if ua.window5h.fraction != ub.window5h.fraction {
+                    return ua.window5h.fraction < ub.window5h.fraction
+                }
+                if ua.windowWeek.resetsAt != ub.windowWeek.resetsAt {
+                    return ua.windowWeek.resetsAt < ub.windowWeek.resetsAt
+                }
+            }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// FreeModel-ключи в порядке отображения таблицы: автосортировка по
+    /// лимитам (`sortedFreeModelKeys`), если включена настройка
+    /// `freeModelAutoSort`, иначе — ручной порядок общего списка. Этот же
+    /// порядок использует автопереключение с исчерпанного ключа
+    /// (`RotationManager.switchFromExhaustedKey`).
+    func displayedFreeModelKeys() -> [APIKey] {
+        freeModelAutoSort ? sortedFreeModelKeys() : keys(in: .freeModel)
+    }
+
+    /// Переставляет ключи внутри категории. `source`/`destination` — индексы
+    /// отфильтрованного по категории списка; глобальные позиции ключей других
+    /// категорий не меняются (переставляемые ключи занимают те же слоты).
+    func move(in category: KeyCategory, from source: IndexSet, to destination: Int) {
+        let indices = keys.indices.filter { keys[$0].category == category }
+        var subset = indices.map { keys[$0] }
+        subset.move(fromOffsets: source, toOffset: destination)
+        for (pos, idx) in indices.enumerated() { keys[idx] = subset[pos] }
+        save()
+    }
+
+    /// Base URL, который реально будет записан в файл для данного ключа:
+    /// собственный baseURL ключа, а если он пуст у FreeModel-ключа — общий
+    /// `freeModelBaseURL` категории.
+    func effectiveBaseURL(for key: APIKey) -> String {
+        let own = key.baseURL.trimmingCharacters(in: .whitespaces)
+        if !own.isEmpty { return own }
+        if key.category == .freeModel {
+            return freeModelBaseURL.trimmingCharacters(in: .whitespaces)
+        }
+        return ""
+    }
+
+    // MARK: - FreeModel usage (окна лимитов 5 ч / 7 дн)
+
+    /// Опрос лимитов FreeModel: сразу при запуске, далее по таймеру-тикеру
+    /// (каждые 30 секунд) с разными интервалами по группам: аккаунт активного
+    /// ключа — раз в `freeModelActiveRefreshMinutes`, остальные — раз в
+    /// `freeModelOthersRefreshMinutes`. Автообновление можно выключить
+    /// настройкой `freeModelAutoRefresh` (тикер продолжает идти и подхватит
+    /// включение без перезапуска). Результаты — в `usageStates`.
+    private func startUsageAutoRefresh() {
+        if freeModelAutoRefresh { refreshAllUsage() }
+        usageTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.autoRefreshUsageTick() }
+        }
+    }
+
+    /// Тик автообновления: запускает только «просроченные» группы токенов.
+    /// Интервалы — из настроек FreeModel (активный аккаунт / остальные).
+    private func autoRefreshUsageTick() {
+        guard freeModelAutoRefresh else { return }
+        let now = Date()
+        for (token, ids) in usageTokenGroups {
+            let isActiveGroup = currentKeyID.map(ids.contains) ?? false
+            let minutes = isActiveGroup ? freeModelActiveRefreshMinutes
+                                        : freeModelOthersRefreshMinutes
+            let interval = TimeInterval(max(1, minutes) * 60)
+            if let last = usageFetchedAt[token],
+               now.timeIntervalSince(last) < interval { continue }
+            fetchUsage(token: token, keyIDs: ids)
+        }
+    }
+
+    /// FreeModel-ключи с заданным токеном сессии, сгруппированные по токену:
+    /// у ключей одного аккаунта токен общий, запрос делается один на аккаунт,
+    /// а результат раскладывается по всем его ключам.
+    private var usageTokenGroups: [String: [UUID]] {
+        var groups: [String: [UUID]] = [:]
+        for key in keys where key.category == .freeModel {
+            let token = (key.usageToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else { continue }
+            groups[token, default: []].append(key.id)
+        }
+        return groups
+    }
+
+    /// Есть ли хотя бы один FreeModel-ключ с токеном сессии (для кнопки обновления).
+    var hasUsageTokens: Bool { !usageTokenGroups.isEmpty }
+
+    /// Обновляет лимиты всех FreeModel-ключей с токеном. `minInterval` — не
+    /// опрашивать токен чаще, чем раз в столько секунд (0 — принудительно).
+    func refreshAllUsage(minInterval: TimeInterval = 0) {
+        let now = Date()
+        for (token, ids) in usageTokenGroups {
+            if minInterval > 0, let last = usageFetchedAt[token],
+               now.timeIntervalSince(last) < minInterval { continue }
+            fetchUsage(token: token, keyIDs: ids)
+        }
+    }
+
+    /// Обновляет лимиты для ключа (и всех ключей с тем же токеном сессии).
+    func refreshUsage(for key: APIKey) {
+        let token = (key.usageToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return }
+        fetchUsage(token: token, keyIDs: usageTokenGroups[token] ?? [key.id])
+    }
+
+    /// Обновляет лимиты всех аккаунтов по очереди: следующий запрос уходит
+    /// через `freeModelSequentialPauseSeconds` секунд после получения ответа
+    /// на предыдущий (щадящий режим, кнопка «Обновить все» внизу списка
+    /// FreeModel).
+    func refreshAllUsageSequentially() {
+        guard !usageRefreshingAll else { return }
+        let groups = usageTokenGroups
+        guard !groups.isEmpty else { return }
+        usageRefreshingAll = true
+        let pause = UInt64(max(0, freeModelSequentialPauseSeconds)) * 1_000_000_000
+        Task { [weak self] in
+            var first = true
+            for (token, ids) in groups {
+                if !first, pause > 0 { try? await Task.sleep(nanoseconds: pause) }
+                first = false
+                await self?.performUsageFetch(token: token, keyIDs: ids)
+            }
+            self?.usageRefreshingAll = false
+        }
+    }
+
+    private func fetchUsage(token: String, keyIDs: [UUID]) {
+        Task { [weak self] in await self?.performUsageFetch(token: token, keyIDs: keyIDs) }
+    }
+
+    private func performUsageFetch(token: String, keyIDs: [UUID]) async {
+        guard !usageTokensInFlight.contains(token) else { return }
+        usageTokensInFlight.insert(token)
+        // Спиннер — только там, где данных ещё нет; обновление идёт без мерцания.
+        for id in keyIDs where usageStates[id]?.usage == nil {
+            usageStates[id] = .loading
+        }
+        // Прокси для запроса: первый прокси, привязанный к любому ключу группы
+        // (у ключей одного аккаунта токен общий). Глобальный переключатель
+        // `proxiesEnabled` намеренно игнорируется — он управляет только записью
+        // прокси в целевой файл. При недоступности прокси запрос уйдёт напрямую
+        // (фолбэк внутри fetchFreeModelUsage).
+        let proxy = keyIDs.lazy
+            .compactMap { [self] id in keys.first { $0.id == id } }
+            .compactMap { [self] in assignedProxy(for: $0) }
+            .first
+        let result = await fetchFreeModelUsage(sessionToken: token, proxy: proxy)
+        usageTokensInFlight.remove(token)
+        usageFetchedAt[token] = Date()
+        let state: FreeModelUsageState
+        switch result {
+        case .ok(let usage):
+            state = .loaded(usage, at: Date())
+        case .unauthorized:
+            state = .failure(tr("Токен сессии недействителен или истёк",
+                                "Session token is invalid or expired"))
+        case .httpError(let code):
+            state = .failure("HTTP \(code)")
+        case .error(let message):
+            state = .failure(message)
+        }
+        // Было ли какое-либо окно активного ключа исчерпано по прежним данным —
+        // фиксируем до перезаписи состояний, чтобы поймать именно переход.
+        // Порог «исчерпания» настраивается (freeModelSwitchThresholdPercent);
+        // исчерпание — достижение порога ЛЮБЫМ из окон (5 ч или 7 дн).
+        let wasExhausted = currentKeyID.flatMap { usageStates[$0]?.usage }
+            .map(isUsageExhausted) ?? false
+        for id in keyIDs { usageStates[id] = state }
+        // Если активный ключ входит в эту группу и одно из его окон только
+        // что дошло до порога — звук (если включён) и переключение на верхний
+        // неисчерпанный ключ таблицы FreeModel (если включено автопереключение,
+        // см. RotationManager.switchFromExhaustedKey). Срабатывает только на
+        // переходе через порог: когда исчерпаны все ключи и выбранный тоже за
+        // порогом, повторного переключения на каждом опросе не будет.
+        if let activeID = currentKeyID, keyIDs.contains(activeID),
+           let usage = state.usage, isUsageExhausted(usage), !wasExhausted {
+            if freeModelSoundEnabled { playExhaustSound() }
+            if freeModelAutoSwitch { onActiveKeyExhausted?() }
+        }
+    }
+
+    /// Исчерпаны ли лимиты: любое из окон (5 ч или 7 дн) достигло порога
+    /// `freeModelSwitchThresholdPercent`. Используется детектом исчерпания и
+    /// фильтром кандидатов автопереключения.
+    func isUsageExhausted(_ usage: FreeModelUsage) -> Bool {
+        let threshold = Double(min(max(freeModelSwitchThresholdPercent, 1), 100)) / 100
+        return usage.window5h.fraction >= threshold
+            || usage.windowWeek.fraction >= threshold
+    }
+
+    /// Исчерпан ли ключ по загруженным лимитам (`isUsageExhausted`); без
+    /// загруженных данных считается неисчерпанным.
+    func isKeyExhausted(_ id: UUID) -> Bool {
+        usageStates[id]?.usage.map(isUsageExhausted) ?? false
+    }
+
+    /// Играет системный звук исчерпания (настройка `freeModelSoundName`);
+    /// если звук с таким именем недоступен — системный beep. Используется при
+    /// детекте исчерпания и для прослушивания в настройках.
+    func playExhaustSound() {
+        if let sound = NSSound(named: freeModelSoundName) { sound.play() } else { NSSound.beep() }
     }
 
     // MARK: - Proxy CRUD
@@ -313,7 +632,7 @@ final class AppStore: ObservableObject {
     func test(_ key: APIKey) {
         let id = key.id
         let api = key.apiKey
-        let base = key.baseURL
+        let base = effectiveBaseURL(for: key)
         testStates[id] = .testing
         Task { [weak self] in
             let result = await testKey(apiKey: api, baseURL: base)
@@ -331,6 +650,10 @@ final class AppStore: ObservableObject {
 
     func testAll() {
         for key in keys { test(key) }
+    }
+
+    func testAll(in category: KeyCategory) {
+        for key in keys(in: category) { test(key) }
     }
 
     // MARK: - Proxy testing
@@ -369,24 +692,46 @@ final class AppStore: ObservableObject {
     /// специфичен для конкретной машины/пользователя и не переносится.
     private struct ExportData: Codable {
         var keys: [APIKey]
+        var freeModelBaseURL: String?
         var proxies: [Proxy]
         var proxiesEnabled: Bool?
         var intervalMinutes: Int
         var startOnLaunch: Bool
         var language: AppLanguage?
         var hideFromDock: Bool?
+        var freeModelAutoRefresh: Bool?
+        var freeModelActiveRefreshMinutes: Int?
+        var freeModelOthersRefreshMinutes: Int?
+        var freeModelSequentialPauseSeconds: Int?
+        var freeModelAutoSwitch: Bool?
+        var freeModelSwitchThresholdPercent: Int?
+        var freeModelSoundEnabled: Bool?
+        var freeModelSoundName: String?
+        var freeModelMenuBarIcon: Bool?
+        var freeModelAutoSort: Bool?
     }
 
     /// Сериализует текущие настройки (ключи, прокси, интервал, автозапуск, язык)
     /// в pretty-printed JSON для сохранения в файл.
     func exportData() -> Data? {
         let export = ExportData(keys: keys,
+                                freeModelBaseURL: freeModelBaseURL,
                                 proxies: proxies,
                                 proxiesEnabled: proxiesEnabled,
                                 intervalMinutes: intervalMinutes,
                                 startOnLaunch: startOnLaunch,
                                 language: language,
-                                hideFromDock: hideFromDock)
+                                hideFromDock: hideFromDock,
+                                freeModelAutoRefresh: freeModelAutoRefresh,
+                                freeModelActiveRefreshMinutes: freeModelActiveRefreshMinutes,
+                                freeModelOthersRefreshMinutes: freeModelOthersRefreshMinutes,
+                                freeModelSequentialPauseSeconds: freeModelSequentialPauseSeconds,
+                                freeModelAutoSwitch: freeModelAutoSwitch,
+                                freeModelSwitchThresholdPercent: freeModelSwitchThresholdPercent,
+                                freeModelSoundEnabled: freeModelSoundEnabled,
+                                freeModelSoundName: freeModelSoundName,
+                                freeModelMenuBarIcon: freeModelMenuBarIcon,
+                                freeModelAutoSort: freeModelAutoSort)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return try? encoder.encode(export)
@@ -401,18 +746,32 @@ final class AppStore: ObservableObject {
             return false
         }
         keys = imported.keys
+        freeModelBaseURL = imported.freeModelBaseURL ?? ""
         proxies = imported.proxies
         proxiesEnabled = imported.proxiesEnabled ?? true
         intervalMinutes = max(1, imported.intervalMinutes)
         startOnLaunch = imported.startOnLaunch
         language = imported.language ?? .systemDefault
         hideFromDock = imported.hideFromDock ?? false
+        freeModelAutoRefresh = imported.freeModelAutoRefresh ?? true
+        freeModelActiveRefreshMinutes = max(1, imported.freeModelActiveRefreshMinutes ?? 2)
+        freeModelOthersRefreshMinutes = max(1, imported.freeModelOthersRefreshMinutes ?? 15)
+        freeModelSequentialPauseSeconds = max(0, imported.freeModelSequentialPauseSeconds ?? 3)
+        freeModelAutoSwitch = imported.freeModelAutoSwitch ?? true
+        freeModelSwitchThresholdPercent = min(max(imported.freeModelSwitchThresholdPercent ?? 100, 50), 100)
+        freeModelSoundEnabled = imported.freeModelSoundEnabled ?? true
+        freeModelSoundName = imported.freeModelSoundName ?? "Glass"
+        freeModelMenuBarIcon = imported.freeModelMenuBarIcon ?? true
+        freeModelAutoSort = imported.freeModelAutoSort ?? true
         // Сбрасываем рантайм-состояние, которое могло устареть.
         currentKeyID = nil
         testStates = [:]
         proxyTestStates = [:]
+        usageStates = [:]
+        usageFetchedAt = [:]
         lastError = nil
         save()
+        refreshAllUsage()
         return true
     }
 
@@ -420,12 +779,23 @@ final class AppStore: ObservableObject {
     /// выбранный целевой файл. Сам файл settings.json пользователя не трогается.
     func resetAll() {
         keys = []
+        freeModelBaseURL = ""
         proxies = []
         proxiesEnabled = true
         intervalMinutes = 30
         startOnLaunch = false
         language = .systemDefault
         hideFromDock = false
+        freeModelAutoRefresh = true
+        freeModelActiveRefreshMinutes = 2
+        freeModelOthersRefreshMinutes = 15
+        freeModelSequentialPauseSeconds = 3
+        freeModelAutoSwitch = true
+        freeModelSwitchThresholdPercent = 100
+        freeModelSoundEnabled = true
+        freeModelSoundName = "Glass"
+        freeModelMenuBarIcon = true
+        freeModelAutoSort = true
         fileBookmark = nil
         filePath = ""
         claudeEnabled = true
@@ -435,6 +805,8 @@ final class AppStore: ObservableObject {
         currentKeyID = nil
         testStates = [:]
         proxyTestStates = [:]
+        usageStates = [:]
+        usageFetchedAt = [:]
         lastError = nil
         lastRotation = nil
         save()

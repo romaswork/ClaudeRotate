@@ -9,12 +9,15 @@ import SwiftUI
 struct KeyRotatorApp: App {
     @StateObject private var store: AppStore
     @StateObject private var rotation: RotationManager
+    @StateObject private var statusItem: StatusItemController
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let store = AppStore()
+        let rotation = RotationManager(store: store)
         _store = StateObject(wrappedValue: store)
-        _rotation = StateObject(wrappedValue: RotationManager(store: store))
+        _rotation = StateObject(wrappedValue: rotation)
+        _statusItem = StateObject(wrappedValue: StatusItemController(store: store, rotation: rotation))
     }
 
     var body: some Scene {
@@ -23,6 +26,7 @@ struct KeyRotatorApp: App {
                 .environmentObject(store)
                 .environmentObject(rotation)
                 .frame(minWidth: 680, minHeight: 380)
+                .background(OpenWindowBridge(statusItem: statusItem))
                 .onAppear {
                     applyActivationPolicy(hidden: store.hideFromDock)
                     // Restore and immediately write the last active key from the
@@ -44,15 +48,6 @@ struct KeyRotatorApp: App {
             // Safety net: flush any unsaved edits when the app is no longer active.
             if phase != .active { store.save() }
         }
-
-        MenuBarExtra {
-            MenuBarContent()
-                .environmentObject(store)
-                .environmentObject(rotation)
-        } label: {
-            MenuBarLabel(store: store)
-        }
-        .menuBarExtraStyle(.menu)
     }
 
     /// Переключает видимость приложения в Dock. `.accessory` убирает иконку из
@@ -65,70 +60,17 @@ struct KeyRotatorApp: App {
     }
 }
 
-struct MenuBarLabel: View {
-    @ObservedObject var store: AppStore
-
-    var body: some View {
-        Image(systemName: store.isRunning ? "key.fill" : "pause.circle")
-            .help(tooltip)
-    }
-
-    private var tooltip: String {
-        if store.isRunning {
-            if let name = store.currentKeyName {
-                return store.tr("Запущена · \(name)", "Running · \(name)")
-            }
-            return store.tr("Запущена", "Running")
-        }
-        return store.tr("На паузе", "Paused")
-    }
-}
-
-struct MenuBarContent: View {
-    @EnvironmentObject private var store: AppStore
-    @EnvironmentObject private var rotation: RotationManager
+/// Передаёт SwiftUI-действие `openWindow` в `StatusItemController`, чтобы левый
+/// клик по значку меню-бара мог заново открыть главное окно даже после его
+/// закрытия (у AppKit-кода прямого доступа к `openWindow` нет).
+private struct OpenWindowBridge: View {
+    let statusItem: StatusItemController
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button(store.tr("Показать приложение", "Show App")) {
-            openWindow(id: "main")
-            NSApp.activate(ignoringOtherApps: true)
-        }
-
-        Divider()
-
-        if let name = store.currentKeyName {
-            Text(store.tr("Активен: \(name)", "Active: \(name)"))
-        } else {
-            Text(store.tr("Нет активного ключа", "No active key"))
-        }
-
-        if let last = store.lastRotation {
-            Text(store.tr("Последняя: \(last.formatted(date: .omitted, time: .standard))",
-                          "Last: \(last.formatted(date: .omitted, time: .standard))"))
-        }
-
-        if let error = store.lastError {
-            Text(store.tr("Ошибка: \(error)", "Error: \(error)"))
-        }
-
-        Divider()
-
-        if store.isRunning {
-            Button(store.tr("Остановить ротацию", "Stop Rotation")) { rotation.stop() }
-        } else {
-            Button(store.tr("Запустить ротацию", "Start Rotation")) { rotation.start() }
-        }
-
-        Button(store.tr("Сменить сейчас", "Rotate Now")) { rotation.rotateNow() }
-
-        Divider()
-
-        Button(store.tr("Настройки…", "Settings…")) {
-            openWindow(id: "main")
-            NSApp.activate(ignoringOtherApps: true)
-        }
-
-        Button(store.tr("Выйти", "Quit KeyRotator")) { NSApp.terminate(nil) }
+        Color.clear
+            .onAppear {
+                statusItem.openMainWindow = { openWindow(id: "main") }
+            }
     }
 }

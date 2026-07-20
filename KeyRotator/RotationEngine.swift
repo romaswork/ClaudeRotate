@@ -40,12 +40,15 @@ enum RotationError: LocalizedError {
 /// If `proxy` is nil (or has no usable URL) the proxy variables are removed,
 /// so a key without an assigned proxy clears any previously written proxy.
 ///
+/// `baseURL` is the already-resolved effective base URL for the key (the key's
+/// own, or the shared FreeModel one — see `AppStore.effectiveBaseURL(for:)`).
+///
 /// `url` must already be a resolved, security-scoped URL with access open (see
 /// `AppStore.withTargetAccess`). The write is NOT atomic: a file-scoped sandbox
 /// bookmark grants access to the file itself but not to its parent directory, so
 /// the temp-file-and-rename trick `.atomic` relies on is unavailable. The file
 /// is tiny, so the in-place write is effectively instantaneous.
-func writeKey(_ key: APIKey, proxy: Proxy?, to url: URL) throws {
+func writeKey(_ key: APIKey, baseURL: String, proxy: Proxy?, to url: URL) throws {
     guard FileManager.default.fileExists(atPath: url.path) else {
         throw RotationError.fileNotFound(url.path)
     }
@@ -59,7 +62,7 @@ func writeKey(_ key: APIKey, proxy: Proxy?, to url: URL) throws {
 
     var env = root["env"] as? [String: Any] ?? [:]
     env["ANTHROPIC_API_KEY"] = key.apiKey
-    env["ANTHROPIC_BASE_URL"] = key.baseURL
+    env["ANTHROPIC_BASE_URL"] = baseURL
     if let proxyURL = proxy?.url {
         env["HTTPS_PROXY"] = proxyURL
         env["HTTP_PROXY"] = proxyURL
@@ -109,6 +112,27 @@ final class RotationManager: ObservableObject {
 
     init(store: AppStore) {
         self.store = store
+        // Автопереключение при исчерпании любого из окон лимитов (5 ч или
+        // 7 дн) активного FreeModel-ключа: AppStore детектирует переход через
+        // настраиваемый порог (freeModelSwitchThresholdPercent) при обновлении
+        // лимитов и, если включён freeModelAutoSwitch, дёргает этот хук (звук
+        // играет сам AppStore).
+        store.onActiveKeyExhausted = { [weak self] in self?.switchFromExhaustedKey() }
+    }
+
+    /// Переключение с исчерпанного активного FreeModel-ключа (хук
+    /// `store.onActiveKeyExhausted`, зовётся только при включённой настройке
+    /// `freeModelAutoSwitch`): активным становится верхний ключ таблицы
+    /// FreeModel в её текущем порядке (`store.displayedFreeModelKeys()` —
+    /// автосортировка по лимитам или ручной порядок), кроме самого
+    /// исчерпанного и кандидатов, у которых любое окно лимитов уже за порогом
+    /// (`store.isKeyExhausted`; ключи без загруженных лимитов не пропускаются).
+    /// Если подходящих включённых FreeModel-ключей нет, смена не происходит.
+    private func switchFromExhaustedKey() {
+        guard let next = store.displayedFreeModelKeys()
+            .first(where: { $0.enabled && $0.id != store.currentKeyID
+                            && !store.isKeyExhausted($0.id) }) else { return }
+        apply(next)
     }
 
     /// Starts the rotation timer. When `immediate` is true the next key is applied
@@ -167,7 +191,10 @@ final class RotationManager: ObservableObject {
         if store.claudeEnabled && store.hasTargetFile {
             do {
                 try store.withTargetAccess { url in
-                    try writeKey(key, proxy: store.proxy(for: key), to: url)
+                    try writeKey(key,
+                                 baseURL: store.effectiveBaseURL(for: key),
+                                 proxy: store.proxy(for: key),
+                                 to: url)
                 }
                 wroteAny = true
             } catch {

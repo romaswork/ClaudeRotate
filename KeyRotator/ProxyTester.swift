@@ -103,7 +103,8 @@ nonisolated func testProxy(_ proxy: Proxy) async -> ProxyTestResult {
 
 /// Делегат сессии, отвечающий на запрос basic-авторизации прокси введёнными
 /// логином и паролем. Если данные неверны, авторизация отменяется (→ 407/ошибка).
-private final class ProxyAuthDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+/// Используется проверкой прокси и запросом лимитов FreeModel (`FreeModelUsage`).
+final class ProxyAuthDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let username: String
     private let password: String
 

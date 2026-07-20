@@ -10,15 +10,18 @@ import UniformTypeIdentifiers
 struct RootView: View {
     @EnvironmentObject private var store: AppStore
     @State private var tab: Tab? = .overview
+    // Раскрыта ли ветка «Ключи» (с подменю FreeModel) в боковой панели.
+    @State private var keysExpanded = true
 
     enum Tab: Hashable, CaseIterable, Identifiable {
-        case overview, keys, proxies, settings
+        case overview, keys, freeModel, proxies, settings
         var id: Self { self }
 
         var icon: String {
             switch self {
             case .overview: return "rectangle.on.rectangle"
             case .keys: return "key"
+            case .freeModel: return "sparkles"
             case .proxies: return "network"
             case .settings: return "gearshape"
             }
@@ -28,6 +31,7 @@ struct RootView: View {
             switch self {
             case .overview: return store.tr("Обзор", "Overview")
             case .keys: return store.tr("Ключи", "Keys")
+            case .freeModel: return "FreeModel"
             case .proxies: return store.tr("Прокси", "Proxies")
             case .settings: return store.tr("Настройки", "Settings")
             }
@@ -36,9 +40,18 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(Tab.allCases, selection: $tab) { item in
-                Label(item.title(store), systemImage: item.icon)
-                    .tag(item)
+            // «FreeModel» — подменю пункта «Ключи»: раскрывающаяся ветка с
+            // отдельной категорией ключей. Сам пункт «Ключи» остаётся кликабельным
+            // и открывает обычные ключи.
+            List(selection: $tab) {
+                sidebarRow(.overview)
+                DisclosureGroup(isExpanded: $keysExpanded) {
+                    sidebarRow(.freeModel)
+                } label: {
+                    sidebarRow(.keys)
+                }
+                sidebarRow(.proxies)
+                sidebarRow(.settings)
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 185, max: 220)
             // Логотип-бренд в шапке боковой панели — всегда виден (нативный паттрен
@@ -53,6 +66,11 @@ struct RootView: View {
                 .navigationTitle((tab ?? .overview).title(store))
         }
         .navigationSplitViewStyle(.balanced)
+    }
+
+    private func sidebarRow(_ item: Tab) -> some View {
+        Label(item.title(store), systemImage: item.icon)
+            .tag(item)
     }
 
     // Шапка боковой панели с логотипом и названием приложения.
@@ -87,7 +105,8 @@ struct RootView: View {
     private var content: some View {
         switch tab ?? .overview {
         case .overview: DashboardView(tab: $tab)
-        case .keys: KeysView()
+        case .keys: KeysView(category: .general)
+        case .freeModel: KeysView(category: .freeModel)
         case .proxies: ProxiesView()
         case .settings: SettingsView()
         }
@@ -194,8 +213,9 @@ struct DashboardView: View {
                     statusBadge(running: store.isRunning)
                 }
                 infoRow(icon: "lock.fill", label: masked(key.apiKey))
-                infoRow(icon: "link", label: key.baseURL.isEmpty
-                        ? store.tr("Base URL по умолчанию", "Default base URL") : key.baseURL)
+                let effectiveBase = store.effectiveBaseURL(for: key)
+                infoRow(icon: "link", label: effectiveBase.isEmpty
+                        ? store.tr("Base URL по умолчанию", "Default base URL") : effectiveBase)
                 if let proxy = store.proxy(for: key) {
                     infoRow(icon: "network", label: proxy.displayName)
                 }
@@ -507,17 +527,32 @@ struct KeysView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var rotation: RotationManager
 
+    // Категория ключей, отображаемая этим списком: обычные («Ключи») или
+    // FreeModel (подменю в боковой панели). Списки независимы, но ротация идёт
+    // по всем включённым ключам обеих категорий.
+    let category: KeyCategory
+
     @State private var editorKey: APIKey?
     @State private var editorIsNew = false
     @State private var selection: APIKey.ID?
     @State private var search = ""
     @State private var keyToDelete: APIKey?
 
+    // Ключи текущей категории. Обычные — в порядке общего списка; FreeModel —
+    // автосортировка по лимитам (заполнение 5-часового окна 0% → 100%, затем
+    // более ранний сброс 7-дневного окна; без данных — после них, полностью
+    // исчерпанные — в самом конце), а при
+    // выключенной настройке `freeModelAutoSort` — ручной порядок. Тот же
+    // порядок использует автопереключение с исчерпанного ключа.
+    private var categoryKeys: [APIKey] {
+        category == .freeModel ? store.displayedFreeModelKeys() : store.keys(in: category)
+    }
+
     // Ключи, отфильтрованные строкой поиска (по имени, base URL и самому ключу).
     private var filteredKeys: [APIKey] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return store.keys }
-        return store.keys.filter {
+        guard !q.isEmpty else { return categoryKeys }
+        return categoryKeys.filter {
             $0.name.lowercased().contains(q)
                 || $0.baseURL.lowercased().contains(q)
                 || $0.apiKey.lowercased().contains(q)
@@ -538,17 +573,17 @@ struct KeysView: View {
     }
 
     // Фон строки во всю ширину (единый механизм для зебры и подсветки, чтобы они
-    // совпадали по форме): активный ключ — зелёная заливка, выключенный —
-    // приглушённая серая, остальные — собственная «зебра» по чётности индекса.
+    // совпадали по форме): выключенный ключ — приглушённая серая заливка,
+    // остальные — собственная «зебра» по чётности индекса. Активный ключ фоном
+    // не выделяется — его показывает увеличенный пульсирующий кружок слева.
     private func rowBackground(for key: APIKey, index: Int) -> Color {
-        if store.currentKeyID == key.id { return Color.green.opacity(0.22) }
         if !key.enabled { return Color.secondary.opacity(0.22) }
         return index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if store.keys.isEmpty {
+            if categoryKeys.isEmpty {
                 emptyState
             } else {
                 ListSearchField(placeholder: store.tr("Поиск ключей", "Search keys"),
@@ -561,6 +596,11 @@ struct KeysView: View {
             }
             Divider()
             bottomBar
+        }
+        .onAppear {
+            // Подтянуть лимиты при заходе в раздел, но не чаще раза в минуту
+            // (основное обновление — фоновый таймер в AppStore).
+            if category == .freeModel { store.refreshAllUsage(minInterval: 60) }
         }
         .sheet(item: $editorKey) { key in
             KeyEditor(key: key, isNew: editorIsNew) { edited in
@@ -589,10 +629,16 @@ struct KeysView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label(store.tr("Нет ключей", "No API Keys"), systemImage: "key.horizontal")
+            Label(category == .freeModel
+                  ? store.tr("Нет ключей FreeModel", "No FreeModel Keys")
+                  : store.tr("Нет ключей", "No API Keys"),
+                  systemImage: category == .freeModel ? "sparkles" : "key.horizontal")
         } description: {
-            Text(store.tr("Добавьте ключ, чтобы начать ротацию.",
-                          "Add a key to start rotating credentials."))
+            Text(category == .freeModel
+                 ? store.tr("Здесь хранятся ключи, полученные через сервис FreeModel.",
+                            "Keys obtained through the FreeModel service live here.")
+                 : store.tr("Добавьте ключ, чтобы начать ротацию.",
+                            "Add a key to start rotating credentials."))
         } actions: {
             Button {
                 presentNew()
@@ -616,6 +662,13 @@ struct KeysView: View {
                        onDelete: { keyToDelete = key })
                     .tag(key.id)
                     .listRowBackground(rowBackground(for: key, index: index))
+                    // Прямоугольная форма хит-тестинга: без неё «пустые» участки
+                    // строки (Spacer, Color.clear-колонки) не ловят двойной клик.
+                    .contentShape(Rectangle())
+                    // Явное выделение по одиночному клику: жест двойного клика
+                    // заставляет систему ждать возможного второго клика, из-за
+                    // чего штатное выделение List срабатывало не с первого раза.
+                    .simultaneousGesture(TapGesture().onEnded { selection = key.id })
                     .simultaneousGesture(TapGesture(count: 2).onEnded { presentEdit(key) })
                     .contextMenu {
                         Button(store.tr("Проверить", "Test")) { store.test(key) }
@@ -626,11 +679,24 @@ struct KeysView: View {
                         Button(store.tr("Удалить", "Delete"), role: .destructive) { keyToDelete = key }
                     }
             }
-            // Перетаскивание доступно только без активного поиска: тогда индексы
-            // отфильтрованного списка совпадают с `store.keys`.
-            .onMove(perform: search.isEmpty ? { store.move(from: $0, to: $1) } : nil)
+            // Перетаскивание доступно только без активного поиска (иначе индексы
+            // отфильтрованного списка не совпадают со списком категории) и не в
+            // FreeModel с включённой автосортировкой по лимитам — там порядок
+            // автоматический.
+            .onMove(perform: (search.isEmpty
+                              && (category != .freeModel || !store.freeModelAutoSort))
+                    ? { store.move(in: category, from: $0, to: $1) } : nil)
         }
         .listStyle(.inset)
+        // Enter/Return делает выбранный ключ активным (аналог кнопки
+        // «Сделать активным» в тулбаре); без выбора или на уже активном
+        // ключе нажатие передаётся дальше.
+        .onKeyPress(.return) {
+            guard let id = selection, id != store.currentKeyID,
+                  let key = store.keys.first(where: { $0.id == id }) else { return .ignored }
+            rotation.apply(key)
+            return .handled
+        }
     }
 
     private var bottomBar: some View {
@@ -670,8 +736,24 @@ struct KeysView: View {
 
             ToolbarIconButton(systemName: "checkmark.shield",
                               help: store.tr("Проверить все ключи", "Test all keys"),
-                              disabled: store.keys.isEmpty) {
-                store.testAll()
+                              disabled: categoryKeys.isEmpty) {
+                store.testAll(in: category)
+            }
+
+            // Последовательное обновление лимитов всех аккаунтов FreeModel:
+            // запросы идут по очереди с настраиваемой паузой после каждого ответа.
+            if category == .freeModel {
+                ToolbarIconButton(systemName: "arrow.triangle.2.circlepath",
+                                  help: store.tr("Обновить все лимиты (по очереди, с паузой \(store.freeModelSequentialPauseSeconds) с)",
+                                                 "Refresh all limits (sequentially, \(store.freeModelSequentialPauseSeconds) s apart)"),
+                                  disabled: !store.hasUsageTokens || store.usageRefreshingAll) {
+                    store.refreshAllUsageSequentially()
+                }
+                if store.usageRefreshingAll {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(.leading, 4)
+                }
             }
 
             Spacer()
@@ -683,13 +765,42 @@ struct KeysView: View {
 
     private func presentNew() {
         editorIsNew = true
-        // Prefill base URL from the previous key (if any), otherwise leave empty.
-        editorKey = APIKey(baseURL: store.keys.last?.baseURL ?? "")
+        // Prefill base URL from the previous key of the same category. For
+        // FreeModel keep it empty so the shared base URL applies by default.
+        let prefill = category == .freeModel ? "" : (categoryKeys.last?.baseURL ?? "")
+        editorKey = APIKey(baseURL: prefill, category: category)
     }
 
     private func presentEdit(_ key: APIKey) {
         editorIsNew = false
         editorKey = key
+    }
+}
+
+// Пульсирующий кружок-индикатор активного ключа: плотное ядро и расходящийся
+// затухающий ореол. Анимация запускается в onAppear и крутится бесконечно
+// (repeatForever), пока строка активна.
+struct PulsingDot: View {
+    let color: Color
+
+    @State private var pulsing = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(color.opacity(0.4))
+                .frame(width: 14, height: 14)
+                .scaleEffect(pulsing ? 1.6 : 0.8)
+                .opacity(pulsing ? 0 : 0.9)
+            Circle()
+                .fill(color)
+                .frame(width: 12, height: 12)
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                pulsing = true
+            }
+        }
     }
 }
 
@@ -711,16 +822,27 @@ struct KeyRow: View {
     var body: some View {
         HStack(spacing: 12) {
             statusDot
-            VStack(alignment: .leading, spacing: 2) {
+            if key.category == .freeModel {
+                // У FreeModel-ключей base URL в строке не показывается (обычно
+                // это общий URL категории): имя — фиксированная колонка, а всю
+                // свободную ширину занимает панель лимитов аккаунта.
                 Text(displayName)
                     .fontWeight(.medium)
-                Text(key.baseURL.isEmpty ? store.tr("Нет base URL", "No base URL") : key.baseURL)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .frame(width: 140, alignment: .leading)
+                usagePanel
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayName)
+                        .fontWeight(.medium)
+                    Text(baseURLLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
             }
-            Spacer()
             // Две «колонки»-капсулы с фиксированной шириной: у всех строк
             // капсула ключа и капсула прокси выровнены по общим вертикалям.
             Group {
@@ -739,7 +861,11 @@ struct KeyRow: View {
                 }
             }
             .frame(width: 140, alignment: .leading)
+            // Результат проверки — тоже фиксированная «колонка»: место
+            // зарезервировано всегда, чтобы появление текста («Валиден» /
+            // «HTTP …») не сдвигало капсулы ключа и прокси.
             testIndicator
+                .frame(width: 80, alignment: .leading)
             hoverActions
             Toggle("", isOn: $key.enabled)
                 .labelsHidden()
@@ -751,10 +877,21 @@ struct KeyRow: View {
         .onHover { hovering = $0 }
     }
 
+    // Индикатор состояния слева: у активного ключа — увеличенный зелёный кружок
+    // с пульсирующим ореолом (именно он выделяет активную строку — фон строки
+    // не меняется), у остальных — маленькая серая точка. Контейнер фиксированного
+    // размера, чтобы смена активного ключа не сдвигала вёрстку строк.
     private var statusDot: some View {
-        Circle()
-            .fill(isActive ? Color.green : (key.enabled ? Color.secondary : Color.secondary.opacity(0.3)))
-            .frame(width: 8, height: 8)
+        ZStack {
+            if isActive {
+                PulsingDot(color: .green)
+            } else {
+                Circle()
+                    .fill(key.enabled ? Color.secondary : Color.secondary.opacity(0.3))
+                    .frame(width: 8, height: 8)
+            }
+        }
+        .frame(width: 14, height: 14)
     }
 
     // Имя ключа, обрезанное до 20 символов (длинные имена не растягивают строку).
@@ -763,11 +900,180 @@ struct KeyRow: View {
         return name.count > 20 ? String(name.prefix(20)) + "…" : name
     }
 
+    // Подпись base URL: собственный URL ключа, для FreeModel-ключа без своего —
+    // общий URL категории с пометкой «Общий», иначе «Нет base URL».
+    private var baseURLLabel: String {
+        if !key.baseURL.isEmpty { return key.baseURL }
+        let effective = store.effectiveBaseURL(for: key)
+        if !effective.isEmpty {
+            return store.tr("Общий: \(effective)", "Shared: \(effective)")
+        }
+        return store.tr("Нет base URL", "No base URL")
+    }
+
     // Последние 3 символа самого API-ключа (`..Jj4`) для быстрой идентификации.
     private var keySuffix: String? {
         let trimmed = key.apiKey.trimmingCharacters(in: .whitespaces)
         guard trimmed.count >= 3 else { return nil }
         return ".." + trimmed.suffix(3)
+    }
+
+    // Панель лимитов аккаунта FreeModel — занимает всю свободную ширину строки.
+    // Два индикатора окон (5 ч / 7 дн): полоса прогресса на «резиновой» ширине,
+    // проценты, суммы и обратный отсчёт до сброса; справа — кнопка ручного
+    // обновления. Отсчёт тикает раз в минуту (TimelineView).
+    @ViewBuilder
+    private var usagePanel: some View {
+        Group {
+            switch store.usageStates[key.id] {
+            case .loaded(let usage, let fetchedAt):
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    HStack(spacing: 14) {
+                        usageGauge(store.tr("5 ч", "5 h"), usage.window5h,
+                                   fetchedAt: fetchedAt, now: context.date)
+                        usageGauge(store.tr("7 дн", "7 d"), usage.windowWeek,
+                                   fetchedAt: fetchedAt, now: context.date)
+                        usageRefreshButton
+                    }
+                }
+            case .loading:
+                HStack(spacing: 5) {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text(store.tr("Загрузка лимитов…", "Loading limits…"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            case .failure(let message):
+                HStack(spacing: 6) {
+                    Label(store.tr("Лимиты недоступны", "Limits unavailable"),
+                          systemImage: "exclamationmark.triangle")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .help(message)
+                    usageRefreshButton
+                }
+            case nil:
+                if hasUsageToken {
+                    HStack(spacing: 6) {
+                        Text(store.tr("Лимиты не загружены", "Limits not loaded"))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                        usageRefreshButton
+                    }
+                } else {
+                    Text(store.tr("Нет токена сессии — лимиты недоступны",
+                                  "No session token — limits unavailable"))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .help(store.tr("Вставьте cookie bm_session с freemodel.dev в поле «Токен сессии» редактора ключа.",
+                                       "Paste the bm_session cookie from freemodel.dev into the “Session token” field of the key editor."))
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var hasUsageToken: Bool {
+        !(key.usageToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    // Ручное обновление лимитов этого ключа (и всех ключей того же аккаунта —
+    // запрос группируется по токену сессии в AppStore).
+    private var usageRefreshButton: some View {
+        Button {
+            store.refreshUsage(for: key)
+        } label: {
+            Image(systemName: "arrow.clockwise")
+                .font(.caption)
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .disabled(!hasUsageToken)
+        .help(store.tr("Обновить лимиты", "Refresh limits"))
+    }
+
+    // Один индикатор окна: заголовок (подпись, процент, суммы «$46.19 / $66»),
+    // полоса прогресса во всю доступную ширину (цвет по степени заполнения)
+    // и обратный отсчёт до сброса. Точная дата сброса и время обновления —
+    // в тултипе.
+    private func usageGauge(_ label: String, _ window: FreeModelUsage.Window,
+                            fetchedAt: Date, now: Date) -> some View {
+        let fraction = window.fraction
+        let color = window.tint
+        let percent = Int((fraction * 100).rounded())
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Text(label)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text("\(percent)%")
+                    .font(.caption2.weight(.bold).monospacedDigit())
+                    .foregroundStyle(color)
+                Spacer(minLength: 6)
+                Text("\(money(window.usedCents)) / \(money(window.limitCents))")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            GeometryReader { geo in
+                Capsule()
+                    .fill(color.opacity(0.16))
+                    .overlay(alignment: .leading) {
+                        Capsule()
+                            .fill(color.gradient)
+                            .frame(width: max(3, geo.size.width * fraction))
+                    }
+            }
+            .frame(height: 5)
+            HStack(spacing: 2) {
+                Image(systemName: "clock.arrow.circlepath")
+                Text(store.tr("сброс \(resetCountdown(window.resetDate, now: now))",
+                              "resets \(resetCountdown(window.resetDate, now: now))"))
+            }
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .help(usageTooltip(label, window, fetchedAt: fetchedAt))
+    }
+
+    // «$12» для круглых сумм, «$46.19» — для остальных.
+    private func money(_ cents: Int) -> String {
+        cents % 100 == 0 ? "$\(cents / 100)" : String(format: "$%.2f", Double(cents) / 100)
+    }
+
+    // Через сколько сбросится окно: «через 32 мин», «через 1 ч 12 м»,
+    // «через 2 дн 3 ч». `now` приходит из TimelineView, чтобы подпись тикала.
+    private func resetCountdown(_ date: Date, now: Date) -> String {
+        let seconds = date.timeIntervalSince(now)
+        guard seconds > 0 else { return store.tr("сейчас", "now") }
+        let totalMinutes = max(1, Int((seconds / 60).rounded(.up)))
+        if totalMinutes < 60 {
+            return store.tr("через \(totalMinutes) мин", "in \(totalMinutes) min")
+        }
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if hours < 24 {
+            return minutes == 0
+                ? store.tr("через \(hours) ч", "in \(hours) h")
+                : store.tr("через \(hours) ч \(minutes) м", "in \(hours) h \(minutes) m")
+        }
+        let days = hours / 24
+        let remHours = hours % 24
+        return remHours == 0
+            ? store.tr("через \(days) дн", "in \(days) d")
+            : store.tr("через \(days) дн \(remHours) ч", "in \(days) d \(remHours) h")
+    }
+
+    private func usageTooltip(_ label: String, _ window: FreeModelUsage.Window,
+                              fetchedAt: Date) -> String {
+        let used = String(format: "$%.2f", Double(window.usedCents) / 100)
+        let limit = String(format: "$%.2f", Double(window.limitCents) / 100)
+        let reset = window.resetDate.formatted(date: .abbreviated, time: .shortened)
+        let updated = fetchedAt.formatted(date: .omitted, time: .shortened)
+        return store.tr("Окно \(label): \(used) из \(limit) · сброс: \(reset) · обновлено в \(updated)",
+                        "\(label) window: \(used) of \(limit) · resets: \(reset) · updated at \(updated)")
     }
 
     // Кнопки действий, проявляющиеся при наведении на строку. Пространство
@@ -886,7 +1192,9 @@ struct KeyRow: View {
                 .lineLimit(1)
                 .help(message)
         case nil:
-            EmptyView()
+            // Не EmptyView: у EmptyView модификатор .frame не создаёт места,
+            // и колонка результата схлопнулась бы, сдвинув соседние колонки.
+            Color.clear
         }
     }
 }
@@ -917,10 +1225,21 @@ struct KeyEditor: View {
         !draft.apiKey.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    // Плейсхолдер поля Base URL: для FreeModel-ключа показывает общий URL
+    // категории (он и применится, если поле оставить пустым).
+    private var baseURLPrompt: String {
+        if draft.category == .freeModel {
+            let shared = store.freeModelBaseURL.trimmingCharacters(in: .whitespaces)
+            if !shared.isEmpty { return shared }
+        }
+        return "https://api.anthropic.com"
+    }
+
     private func runTest() {
         testState = .testing
         let api = draft.apiKey
-        let base = draft.baseURL
+        // Как при ротации: пустой Base URL у FreeModel-ключа заменяется общим.
+        let base = store.effectiveBaseURL(for: draft)
         Task {
             let result = await testKey(apiKey: api, baseURL: base)
             switch result {
@@ -949,15 +1268,52 @@ struct KeyEditor: View {
                 }
 
                 Section {
+                    Picker(store.tr("Категория", "Category"), selection: $draft.category) {
+                        Text(store.tr("Обычный", "General")).tag(KeyCategory.general)
+                        Text("FreeModel").tag(KeyCategory.freeModel)
+                    }
+                    .pickerStyle(.segmented)
+                } footer: {
+                    Text(store.tr("Ключи FreeModel хранятся в подменю «FreeModel» вкладки «Ключи».",
+                                  "FreeModel keys live in the “FreeModel” submenu of the Keys tab."))
+                }
+
+                Section {
                     TextField("API Key", text: $draft.apiKey, prompt: Text("sk-ant-…"))
                         .font(.system(.body, design: .monospaced))
-                    TextField("Base URL", text: $draft.baseURL, prompt: Text("https://api.anthropic.com"))
+                    TextField("Base URL", text: $draft.baseURL, prompt: Text(baseURLPrompt))
                         .font(.system(.body, design: .monospaced))
                 } header: {
                     Text(store.tr("Учётные данные", "Credentials"))
                 } footer: {
-                    Text(store.tr("Записывается в ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL при ротации.",
-                                  "Written to ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL on rotation."))
+                    if draft.category == .freeModel {
+                        Text(store.tr("Записывается в ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL при ротации. Пустой Base URL — используется общий URL категории FreeModel.",
+                                      "Written to ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL on rotation. Leave Base URL empty to use the shared FreeModel URL."))
+                    } else {
+                        Text(store.tr("Записывается в ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL при ротации.",
+                                      "Written to ANTHROPIC_API_KEY / ANTHROPIC_BASE_URL on rotation."))
+                    }
+                }
+
+                // Токен сессии дашборда FreeModel — только для показа лимитов
+                // аккаунта (окна 5 ч / 7 дн) в списке; в файл не записывается.
+                if draft.category == .freeModel {
+                    Section {
+                        TextField(store.tr("Токен сессии", "Session token"),
+                                  text: Binding(
+                                      get: { draft.usageToken ?? "" },
+                                      set: {
+                                          let t = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                                          draft.usageToken = t.isEmpty ? nil : t
+                                      }),
+                                  prompt: Text("bm_session…"))
+                            .font(.system(.body, design: .monospaced))
+                    } header: {
+                        Text(store.tr("Лимиты аккаунта", "Account limits"))
+                    } footer: {
+                        Text(store.tr("Значение cookie bm_session с сайта freemodel.dev (DevTools → Application → Cookies). Включает показ окон лимитов 5 ч / 7 дн в списке. Токен живёт ~30 дней; в целевой файл не записывается.",
+                                      "The bm_session cookie value from freemodel.dev (DevTools → Application → Cookies). Enables the 5 h / 7 d limit windows in the list. The token lives ~30 days; it is never written to the target file."))
+                    }
                 }
 
                 Section {
@@ -999,7 +1355,7 @@ struct KeyEditor: View {
             }
             .padding()
         }
-        .frame(width: 440, height: 440)
+        .frame(width: 440, height: 530)
     }
 
     @ViewBuilder
@@ -1033,9 +1389,53 @@ struct SettingsView: View {
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var rotation: RotationManager
 
+    // Вкладки настроек: «Общие» — цели, ротация, прокси, интерфейс, данные;
+    // «FreeModel» — все настройки одноимённой категории ключей.
+    private enum SettingsTab: Hashable {
+        case general
+        case freeModel
+    }
+
+    @State private var tab: SettingsTab = .general
     @State private var showResetConfirm = false
 
+    // Системные звуки macOS, доступные через NSSound(named:) — выбор звука
+    // уведомления об исчерпании лимитов.
+    private static let systemSounds = ["Basso", "Blow", "Bottle", "Frog", "Funk",
+                                       "Glass", "Hero", "Morse", "Ping", "Pop",
+                                       "Purr", "Sosumi", "Submarine", "Tink"]
+
     var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $tab) {
+                Text(store.tr("Общие", "General")).tag(SettingsTab.general)
+                Text("FreeModel").tag(SettingsTab.freeModel)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 320)
+            .padding(.top, 10)
+
+            switch tab {
+            case .general: generalForm
+            case .freeModel: freeModelForm
+            }
+        }
+        .alert(store.tr("Сбросить все настройки?", "Reset all settings?"), isPresented: $showResetConfirm) {
+            Button(store.tr("Отмена", "Cancel"), role: .cancel) { }
+            Button(store.tr("Сбросить", "Reset"), role: .destructive) {
+                rotation.stop()
+                store.resetAll()
+            }
+        } message: {
+            Text(store.tr("Все ключи, прокси и настройки будут удалены без возможности восстановления. Целевой файл settings.json не изменится.",
+                          "All keys, proxies and settings will be permanently deleted. Your target settings.json won't be changed."))
+        }
+    }
+
+    // MARK: Вкладка «Общие»
+
+    private var generalForm: some View {
         Form {
             Section {
                 targetFileRow(title: store.tr("Claude Code (settings.json)", "Claude Code (settings.json)"),
@@ -1180,15 +1580,128 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .alert(store.tr("Сбросить все настройки?", "Reset all settings?"), isPresented: $showResetConfirm) {
-            Button(store.tr("Отмена", "Cancel"), role: .cancel) { }
-            Button(store.tr("Сбросить", "Reset"), role: .destructive) {
-                rotation.stop()
-                store.resetAll()
+    }
+
+    // MARK: Вкладка «FreeModel»
+
+    private var freeModelForm: some View {
+        Form {
+            Section {
+                TextField(store.tr("Общий Base URL", "Shared base URL"),
+                          text: $store.freeModelBaseURL,
+                          prompt: Text("https://…"))
+                    .font(.system(.body, design: .monospaced))
+                    .onChange(of: store.freeModelBaseURL) { _, _ in store.save() }
+            } header: {
+                Label("Base URL", systemImage: "link")
+            } footer: {
+                Text(store.tr("Применяется к FreeModel-ключам, у которых не задан собственный Base URL. Ключ с собственным Base URL использует свой.",
+                              "Applies to FreeModel keys without their own base URL. A key with its own base URL uses that instead."))
             }
-        } message: {
-            Text(store.tr("Все ключи, прокси и настройки будут удалены без возможности восстановления. Целевой файл settings.json не изменится.",
-                          "All keys, proxies and settings will be permanently deleted. Your target settings.json won't be changed."))
+
+            Section {
+                Toggle(store.tr("Автообновление лимитов", "Auto-refresh limits"),
+                       isOn: $store.freeModelAutoRefresh)
+                    .onChange(of: store.freeModelAutoRefresh) { _, _ in store.save() }
+
+                numberRow(store.tr("Активный аккаунт", "Active account"),
+                          value: $store.freeModelActiveRefreshMinutes,
+                          range: 1...60,
+                          unit: store.tr("мин", "min"))
+                    .disabled(!store.freeModelAutoRefresh)
+
+                numberRow(store.tr("Остальные аккаунты", "Other accounts"),
+                          value: $store.freeModelOthersRefreshMinutes,
+                          range: 1...180,
+                          unit: store.tr("мин", "min"))
+                    .disabled(!store.freeModelAutoRefresh)
+
+                numberRow(store.tr("Пауза «Обновить все»", "“Refresh all” pause"),
+                          value: $store.freeModelSequentialPauseSeconds,
+                          range: 0...60,
+                          unit: store.tr("с", "s"))
+            } header: {
+                Label(store.tr("Обновление лимитов", "Limits refresh"),
+                      systemImage: "clock.arrow.circlepath")
+            } footer: {
+                Text(store.tr("Лимиты аккаунтов запрашиваются в фоне: аккаунт активного ключа — чаще, остальные — реже. Когда автообновление выключено, лимиты обновляются только вручную и при входе в раздел FreeModel. Пауза — интервал между аккаунтами при последовательном «Обновить все».",
+                              "Account limits are fetched in the background: the active key's account more often, the rest less often. When auto-refresh is off, limits update only manually and when opening the FreeModel section. The pause is the delay between accounts during the sequential “Refresh all”."))
+            }
+
+            Section {
+                Toggle(store.tr("Переключать ключ автоматически", "Switch key automatically"),
+                       isOn: $store.freeModelAutoSwitch)
+                    .onChange(of: store.freeModelAutoSwitch) { _, _ in store.save() }
+
+                numberRow(store.tr("Порог исчерпания", "Exhaustion threshold"),
+                          value: $store.freeModelSwitchThresholdPercent,
+                          range: 50...100,
+                          unit: "%")
+
+                Toggle(store.tr("Звук при исчерпании", "Play sound on exhaustion"),
+                       isOn: $store.freeModelSoundEnabled)
+                    .onChange(of: store.freeModelSoundEnabled) { _, _ in store.save() }
+
+                Picker(store.tr("Звук", "Sound"), selection: $store.freeModelSoundName) {
+                    ForEach(Self.systemSounds, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
+                .disabled(!store.freeModelSoundEnabled)
+                .onChange(of: store.freeModelSoundName) { _, _ in
+                    store.save()
+                    // Прослушивание: выбранный звук сразу проигрывается.
+                    store.playExhaustSound()
+                }
+            } header: {
+                Label(store.tr("Исчерпание лимитов", "Limit exhaustion"),
+                      systemImage: "bolt.badge.clock")
+            } footer: {
+                Text(store.tr("Когда любое окно лимитов (5 ч или 7 дн) активного FreeModel-ключа доходит до порога, играет звук и активным становится верхний ключ таблицы FreeModel (кроме исчерпанного). Если других включённых FreeModel-ключей нет, смена не происходит.",
+                              "When either usage window (5 h or 7 d) of the active FreeModel key reaches the threshold, a sound plays and the top key of the FreeModel table (other than the exhausted one) becomes active. If there are no other enabled FreeModel keys, no switch happens."))
+            }
+
+            Section {
+                Toggle(store.tr("Лимиты в меню-баре", "Limits in the menu bar"),
+                       isOn: $store.freeModelMenuBarIcon)
+                    .onChange(of: store.freeModelMenuBarIcon) { _, _ in store.save() }
+
+                Toggle(store.tr("Автосортировка списка по лимитам", "Auto-sort list by limits"),
+                       isOn: $store.freeModelAutoSort)
+                    .onChange(of: store.freeModelAutoSort) { _, _ in store.save() }
+            } header: {
+                Label(store.tr("Отображение", "Appearance"), systemImage: "eye")
+            } footer: {
+                Text(store.tr("«Лимиты в меню-баре» — вместо значка приложения показывается процент 5-часового окна активного FreeModel-ключа с цветной полоской. Автосортировка упорядочивает список FreeModel по заполнению 5-часового окна; когда она выключена, порядок ручной (перетаскиванием), как у обычных ключей. Этот же порядок использует автопереключение.",
+                              "“Limits in the menu bar” replaces the app icon with the active FreeModel key's 5-hour window percentage and a colored bar. Auto-sort orders the FreeModel list by 5-hour window usage; when off, the order is manual (drag and drop), like regular keys. Auto-switching uses the same order."))
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Строка числовой настройки: подпись, текстовое поле, единица измерения и
+    /// степпер. Значение зажимается в `range` и сохраняется при каждом изменении.
+    @ViewBuilder
+    private func numberRow(_ title: String,
+                           value: Binding<Int>,
+                           range: ClosedRange<Int>,
+                           unit: String) -> some View {
+        LabeledContent(title) {
+            HStack(spacing: 8) {
+                TextField("", value: value, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 56)
+                    .multilineTextAlignment(.trailing)
+                Text(unit)
+                    .foregroundStyle(.secondary)
+                Stepper("", value: value, in: range)
+                    .labelsHidden()
+            }
+        }
+        .onChange(of: value.wrappedValue) { _, newValue in
+            let clamped = min(max(newValue, range.lowerBound), range.upperBound)
+            if clamped != newValue { value.wrappedValue = clamped }
+            store.save()
         }
     }
 
@@ -1413,6 +1926,11 @@ struct ProxiesView: View {
                          onDelete: { proxyToDelete = proxy })
                     .tag(proxy.id)
                     .listRowBackground(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.04))
+                    // См. keyList: contentShape нужен, чтобы двойной клик ловился
+                    // по всей строке, а не только по непрозрачным элементам;
+                    // одиночный тап — явное выделение с первого клика.
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(TapGesture().onEnded { selection = proxy.id })
                     .simultaneousGesture(TapGesture(count: 2).onEnded { presentEdit(proxy) })
                     .contextMenu {
                         Button(store.tr("Проверить", "Test")) { store.testProxy(proxy) }
