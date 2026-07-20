@@ -141,6 +141,9 @@ struct DashboardView: View {
                     noFileBanner
                 }
                 heroCard
+                if let key = store.currentKey, key.category == .freeModel {
+                    usageCard(for: key)
+                }
                 statsGrid
                 if let error = store.lastError {
                     errorBanner(error)
@@ -324,6 +327,163 @@ struct DashboardView: View {
         }
         .controlSize(.large)
         .buttonStyle(.bordered)
+    }
+
+    // MARK: FreeModel usage card
+
+    // Карточка лимитов аккаунта FreeModel активного ключа — показывается только
+    // когда активный ключ категории FreeModel. Два крупных индикатора окон
+    // (5 ч / 7 дн): процент, растянутая полоса прогресса квартильного цвета
+    // (Window.tint), суммы и обратный отсчёт до сброса (тикает раз в минуту
+    // через TimelineView). В заголовке — время обновления и кнопка ручного
+    // обновления; цветовой акцент карточки — по более заполненному окну.
+    @ViewBuilder
+    private func usageCard(for key: APIKey) -> some View {
+        let state = store.usageStates[key.id]
+        VStack(alignment: .leading, spacing: 12) {
+            usageCardHeader(for: key, state: state)
+            switch state {
+            case .loaded(let usage, let fetchedAt):
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    HStack(alignment: .top, spacing: 20) {
+                        usageCardGauge(store.tr("Окно 5 часов", "5-hour window"),
+                                       usage.window5h, fetchedAt: fetchedAt, now: context.date)
+                        Divider()
+                        usageCardGauge(store.tr("Окно 7 дней", "7-day window"),
+                                       usage.windowWeek, fetchedAt: fetchedAt, now: context.date)
+                    }
+                }
+            case .loading:
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(store.tr("Загрузка лимитов…", "Loading limits…"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            case .failure(let message):
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text(store.tr("Лимиты недоступны", "Limits unavailable"))
+                        .font(.callout)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .help(message)
+            case nil:
+                Text(hasUsageToken(key)
+                     ? store.tr("Лимиты ещё не загружены — нажмите «Обновить».",
+                                "Limits not loaded yet — press “Refresh”.")
+                     : store.tr("Нет токена сессии — вставьте cookie bm_session с freemodel.dev в поле «Токен сессии» редактора ключа.",
+                                "No session token — paste the bm_session cookie from freemodel.dev into the “Session token” field of the key editor."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .dashboardCard(tint: usageCardTint(state))
+    }
+
+    private func usageCardHeader(for key: APIKey, state: FreeModelUsageState?) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "gauge.with.needle")
+                .font(.title3)
+                .foregroundStyle(usageCardTint(state) ?? .secondary)
+            Text(store.tr("Лимиты FreeModel", "FreeModel limits"))
+                .font(.headline)
+            if case .loaded(_, let fetchedAt) = state {
+                Text(store.tr("обновлено в \(fetchedAt.formatted(date: .omitted, time: .shortened))",
+                              "updated at \(fetchedAt.formatted(date: .omitted, time: .shortened))"))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            Button {
+                tab = .freeModel
+            } label: {
+                Image(systemName: "list.bullet")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help(store.tr("Открыть раздел FreeModel", "Open the FreeModel section"))
+            Button {
+                store.refreshUsage(for: key)
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .disabled(!hasUsageToken(key) || state == .loading)
+            .help(store.tr("Обновить лимиты", "Refresh limits"))
+        }
+    }
+
+    // Крупный индикатор одного окна лимитов: заголовок с процентом, полоса
+    // прогресса во всю ширину колонки, суммы и обратный отсчёт до сброса.
+    // Детали (точная дата сброса, время обновления) — в тултипе.
+    private func usageCardGauge(_ label: String, _ window: FreeModelUsage.Window,
+                                fetchedAt: Date, now: Date) -> some View {
+        let fraction = window.fraction
+        let color = window.tint
+        let percent = Int((fraction * 100).rounded())
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text("\(percent)%")
+                    .font(.system(.title3, design: .rounded).weight(.bold).monospacedDigit())
+                    .foregroundStyle(color)
+            }
+            GeometryReader { geo in
+                Capsule()
+                    .fill(color.opacity(0.16))
+                    .overlay(alignment: .leading) {
+                        Capsule()
+                            .fill(color.gradient)
+                            .frame(width: max(4, geo.size.width * fraction))
+                    }
+            }
+            .frame(height: 8)
+            HStack {
+                Text("\(usageMoney(window.usedCents)) / \(usageMoney(window.limitCents))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                HStack(spacing: 3) {
+                    Image(systemName: "clock.arrow.circlepath")
+                    Text(store.tr("сброс \(usageResetCountdown(window.resetDate, now: now, store: store))",
+                                  "resets \(usageResetCountdown(window.resetDate, now: now, store: store))"))
+                }
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .help(usageWindowTooltip(label, window, fetchedAt: fetchedAt, store: store))
+    }
+
+    // Акцент карточки — цвет более заполненного из двух окон; при ошибке
+    // загрузки — оранжевый, пока данных нет — без акцента.
+    private func usageCardTint(_ state: FreeModelUsageState?) -> Color? {
+        switch state {
+        case .loaded(let usage, _):
+            return (usage.window5h.fraction >= usage.windowWeek.fraction
+                    ? usage.window5h : usage.windowWeek).tint
+        case .failure:
+            return .orange
+        default:
+            return nil
+        }
+    }
+
+    private func hasUsageToken(_ key: APIKey) -> Bool {
+        !(key.usageToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: Stats grid
@@ -538,6 +698,14 @@ struct KeysView: View {
     @State private var search = ""
     @State private var keyToDelete: APIKey?
 
+    // Ширина области списка — для адаптивной вёрстки строк: на узком окне
+    // строки переходят в компактный режим (результат проверки — только
+    // иконкой, без строки «сброс через…», суженные колонки), чтобы больше
+    // ширины доставалось панели лимитов.
+    @State private var listWidth: CGFloat = 0
+
+    private var isCompact: Bool { listWidth > 0 && listWidth < 1000 }
+
     // Ключи текущей категории. Обычные — в порядке общего списка; FreeModel —
     // автосортировка по лимитам (заполнение 5-часового окна 0% → 100%, затем
     // более ранний сброс 7-дневного окна; без данных — после них, полностью
@@ -597,6 +765,13 @@ struct KeysView: View {
             Divider()
             bottomBar
         }
+        .background(
+            GeometryReader { geo in
+                Color.clear
+                    .onAppear { listWidth = geo.size.width }
+                    .onChange(of: geo.size.width) { _, width in listWidth = width }
+            }
+        )
         .onAppear {
             // Подтянуть лимиты при заходе в раздел, но не чаще раза в минуту
             // (основное обновление — фоновый таймер в AppStore).
@@ -655,6 +830,7 @@ struct KeysView: View {
                 KeyRow(key: binding(for: key),
                        isActive: store.currentKeyID == key.id,
                        testState: store.testStates[key.id],
+                       compact: isCompact,
                        onToggle: { store.save() },
                        onTest: { store.test(key) },
                        onEdit: { presentEdit(key) },
@@ -777,9 +953,10 @@ struct KeysView: View {
     }
 }
 
-// Пульсирующий кружок-индикатор активного ключа: плотное ядро и расходящийся
-// затухающий ореол. Анимация запускается в onAppear и крутится бесконечно
-// (repeatForever), пока строка активна.
+// Пульсирующий кружок-индикатор активного ключа: светящееся ядро и два
+// расходящихся затухающих кольца со сдвигом фазы (ореол читается непрерывно,
+// а не «вспышками» раз в цикл). Анимация запускается в onAppear и крутится
+// бесконечно (repeatForever), пока строка активна.
 struct PulsingDot: View {
     let color: Color
 
@@ -787,21 +964,73 @@ struct PulsingDot: View {
 
     var body: some View {
         ZStack {
-            Circle()
-                .fill(color.opacity(0.4))
-                .frame(width: 14, height: 14)
-                .scaleEffect(pulsing ? 1.6 : 0.8)
-                .opacity(pulsing ? 0 : 0.9)
+            ring(delay: 0)
+            ring(delay: 0.75)
             Circle()
                 .fill(color)
                 .frame(width: 12, height: 12)
+                .shadow(color: color.opacity(0.8), radius: 3)
         }
-        .onAppear {
-            withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                pulsing = true
-            }
-        }
+        // Пропорциональное уменьшение всего индикатора (ядро + ореол) на 20%,
+        // сама анимация колец при этом не меняется.
+        .scaleEffect(0.8)
+        .onAppear { pulsing = true }
     }
+
+    // Кольцо рисуется штрихом (а не заливкой), поэтому остаётся видимым и на
+    // большом радиусе; delay сдвигает фазу второго кольца на полцикла.
+    private func ring(delay: Double) -> some View {
+        Circle()
+            .stroke(color, lineWidth: 2)
+            .frame(width: 12, height: 12)
+            .scaleEffect(pulsing ? 2.6 : 1.0)
+            .opacity(pulsing ? 0 : 0.85)
+            .animation(.easeOut(duration: 1.5).repeatForever(autoreverses: false).delay(delay),
+                       value: pulsing)
+    }
+}
+
+// MARK: - Форматирование лимитов FreeModel
+
+// Общие форматтеры панелей лимитов — используются и строками списка FreeModel
+// (KeyRow.usagePanel), и карточкой лимитов на дашборде (DashboardView.usageCard).
+
+// «$12» для круглых сумм, «$46.19» — для остальных.
+private func usageMoney(_ cents: Int) -> String {
+    cents % 100 == 0 ? "$\(cents / 100)" : String(format: "$%.2f", Double(cents) / 100)
+}
+
+// Через сколько сбросится окно: «через 32 мин», «через 1 ч 12 м»,
+// «через 2 дн 3 ч». `now` приходит из TimelineView, чтобы подпись тикала.
+private func usageResetCountdown(_ date: Date, now: Date, store: AppStore) -> String {
+    let seconds = date.timeIntervalSince(now)
+    guard seconds > 0 else { return store.tr("сейчас", "now") }
+    let totalMinutes = max(1, Int((seconds / 60).rounded(.up)))
+    if totalMinutes < 60 {
+        return store.tr("через \(totalMinutes) мин", "in \(totalMinutes) min")
+    }
+    let hours = totalMinutes / 60
+    let minutes = totalMinutes % 60
+    if hours < 24 {
+        return minutes == 0
+            ? store.tr("через \(hours) ч", "in \(hours) h")
+            : store.tr("через \(hours) ч \(minutes) м", "in \(hours) h \(minutes) m")
+    }
+    let days = hours / 24
+    let remHours = hours % 24
+    return remHours == 0
+        ? store.tr("через \(days) дн", "in \(days) d")
+        : store.tr("через \(days) дн \(remHours) ч", "in \(days) d \(remHours) h")
+}
+
+private func usageWindowTooltip(_ label: String, _ window: FreeModelUsage.Window,
+                                fetchedAt: Date, store: AppStore) -> String {
+    let used = String(format: "$%.2f", Double(window.usedCents) / 100)
+    let limit = String(format: "$%.2f", Double(window.limitCents) / 100)
+    let reset = window.resetDate.formatted(date: .abbreviated, time: .shortened)
+    let updated = fetchedAt.formatted(date: .omitted, time: .shortened)
+    return store.tr("Окно \(label): \(used) из \(limit) · сброс: \(reset) · обновлено в \(updated)",
+                    "\(label) window: \(used) of \(limit) · resets: \(reset) · updated at \(updated)")
 }
 
 struct KeyRow: View {
@@ -809,6 +1038,10 @@ struct KeyRow: View {
     @Binding var key: APIKey
     let isActive: Bool
     let testState: KeyTestState?
+    // Компактный режим на узком окне (< 1000 pt, измеряет KeysView): результат
+    // проверки — только иконкой, без обратного отсчёта «сброс через…»,
+    // суженные колонки и отступы.
+    let compact: Bool
     let onToggle: () -> Void
     let onTest: () -> Void
     let onEdit: () -> Void
@@ -820,7 +1053,7 @@ struct KeyRow: View {
     @State private var copiedProxy = false
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: compact ? 8 : 12) {
             statusDot
             if key.category == .freeModel {
                 // У FreeModel-ключей base URL в строке не показывается (обычно
@@ -861,12 +1094,16 @@ struct KeyRow: View {
                 }
             }
             .frame(width: 140, alignment: .leading)
-            // Результат проверки — тоже фиксированная «колонка»: место
-            // зарезервировано всегда, чтобы появление текста («Валиден» /
-            // «HTTP …») не сдвигало капсулы ключа и прокси.
-            testIndicator
-                .frame(width: 80, alignment: .leading)
-            hoverActions
+            // На узком окне всё между прокси и тумблером (результат проверки и
+            // кнопки действий) скрывается, чтобы освободить ширину; на широком —
+            // результат проверки в фиксированной колонке 80 pt (место
+            // зарезервировано всегда, чтобы текст «Валиден»/«HTTP …» не сдвигал
+            // капсулы) и кнопки действий при наведении.
+            if !compact {
+                testIndicator
+                    .frame(width: 80, alignment: .leading)
+                hoverActions
+            }
             Toggle("", isOn: $key.enabled)
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -879,12 +1116,18 @@ struct KeyRow: View {
 
     // Индикатор состояния слева: у активного ключа — увеличенный зелёный кружок
     // с пульсирующим ореолом (именно он выделяет активную строку — фон строки
-    // не меняется), у остальных — маленькая серая точка. Контейнер фиксированного
-    // размера, чтобы смена активного ключа не сдвигала вёрстку строк.
+    // не меняется), у следующего по ротации (`store.nextKeyID`) — синяя точка,
+    // у остальных — маленькая серая. Контейнер фиксированного размера, чтобы
+    // смена активного ключа не сдвигала вёрстку строк.
     private var statusDot: some View {
         ZStack {
             if isActive {
                 PulsingDot(color: .green)
+            } else if store.nextKeyID == key.id {
+                Circle()
+                    .fill(Color.blue)
+                    .frame(width: 9, height: 9)
+                    .help(store.tr("Следующий ключ", "Next key"))
             } else {
                 Circle()
                     .fill(key.enabled ? Color.secondary : Color.secondary.opacity(0.3))
@@ -928,7 +1171,7 @@ struct KeyRow: View {
             switch store.usageStates[key.id] {
             case .loaded(let usage, let fetchedAt):
                 TimelineView(.periodic(from: .now, by: 60)) { context in
-                    HStack(spacing: 14) {
+                    HStack(spacing: compact ? 10 : 14) {
                         usageGauge(store.tr("5 ч", "5 h"), usage.window5h,
                                    fetchedAt: fetchedAt, now: context.date)
                         usageGauge(store.tr("7 дн", "7 d"), usage.windowWeek,
@@ -1011,7 +1254,7 @@ struct KeyRow: View {
                     .font(.caption2.weight(.bold).monospacedDigit())
                     .foregroundStyle(color)
                 Spacer(minLength: 6)
-                Text("\(money(window.usedCents)) / \(money(window.limitCents))")
+                Text("\(usageMoney(window.usedCents)) / \(usageMoney(window.limitCents))")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -1028,52 +1271,14 @@ struct KeyRow: View {
             .frame(height: 5)
             HStack(spacing: 2) {
                 Image(systemName: "clock.arrow.circlepath")
-                Text(store.tr("сброс \(resetCountdown(window.resetDate, now: now))",
-                              "resets \(resetCountdown(window.resetDate, now: now))"))
+                Text(store.tr("сброс \(usageResetCountdown(window.resetDate, now: now, store: store))",
+                              "resets \(usageResetCountdown(window.resetDate, now: now, store: store))"))
             }
             .font(.caption2)
             .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
-        .help(usageTooltip(label, window, fetchedAt: fetchedAt))
-    }
-
-    // «$12» для круглых сумм, «$46.19» — для остальных.
-    private func money(_ cents: Int) -> String {
-        cents % 100 == 0 ? "$\(cents / 100)" : String(format: "$%.2f", Double(cents) / 100)
-    }
-
-    // Через сколько сбросится окно: «через 32 мин», «через 1 ч 12 м»,
-    // «через 2 дн 3 ч». `now` приходит из TimelineView, чтобы подпись тикала.
-    private func resetCountdown(_ date: Date, now: Date) -> String {
-        let seconds = date.timeIntervalSince(now)
-        guard seconds > 0 else { return store.tr("сейчас", "now") }
-        let totalMinutes = max(1, Int((seconds / 60).rounded(.up)))
-        if totalMinutes < 60 {
-            return store.tr("через \(totalMinutes) мин", "in \(totalMinutes) min")
-        }
-        let hours = totalMinutes / 60
-        let minutes = totalMinutes % 60
-        if hours < 24 {
-            return minutes == 0
-                ? store.tr("через \(hours) ч", "in \(hours) h")
-                : store.tr("через \(hours) ч \(minutes) м", "in \(hours) h \(minutes) m")
-        }
-        let days = hours / 24
-        let remHours = hours % 24
-        return remHours == 0
-            ? store.tr("через \(days) дн", "in \(days) d")
-            : store.tr("через \(days) дн \(remHours) ч", "in \(days) d \(remHours) h")
-    }
-
-    private func usageTooltip(_ label: String, _ window: FreeModelUsage.Window,
-                              fetchedAt: Date) -> String {
-        let used = String(format: "$%.2f", Double(window.usedCents) / 100)
-        let limit = String(format: "$%.2f", Double(window.limitCents) / 100)
-        let reset = window.resetDate.formatted(date: .abbreviated, time: .shortened)
-        let updated = fetchedAt.formatted(date: .omitted, time: .shortened)
-        return store.tr("Окно \(label): \(used) из \(limit) · сброс: \(reset) · обновлено в \(updated)",
-                        "\(label) window: \(used) of \(limit) · resets: \(reset) · updated at \(updated)")
+        .help(usageWindowTooltip(label, window, fetchedAt: fetchedAt, store: store))
     }
 
     // Кнопки действий, проявляющиеся при наведении на строку. Пространство

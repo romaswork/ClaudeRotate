@@ -5,8 +5,20 @@
 
 import SwiftUI
 
+/// SwiftUI по умолчанию завершает приложение при закрытии последнего окна
+/// (отвечает `true` на `applicationShouldTerminateAfterLastWindowClosed`).
+/// Наш значок в меню-баре — собственный `NSStatusItem`, о котором SwiftUI не
+/// знает, поэтому без делегата крестик убивал ротацию. Делегат оставляет
+/// приложение работать в фоне после закрытия окна.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+}
+
 @main
 struct KeyRotatorApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store: AppStore
     @StateObject private var rotation: RotationManager
     @StateObject private var statusItem: StatusItemController

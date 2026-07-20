@@ -685,6 +685,21 @@ final class AppStore: ObservableObject {
         keys.filter { $0.enabled }
     }
 
+    /// Ключ, который станет активным при следующей ротации: следующий включённый
+    /// ключ после текущего по общему списку `keys` (по кругу), а если активного
+    /// ключа нет или он выключен — первый включённый. nil, когда включённых
+    /// ключей нет или следующий совпадает с текущим (включён только он один).
+    var nextKeyID: UUID? {
+        let enabled = enabledKeys
+        guard !enabled.isEmpty else { return nil }
+        guard let current = currentKeyID,
+              let idx = enabled.firstIndex(where: { $0.id == current }) else {
+            return enabled[0].id
+        }
+        let next = enabled[(idx + 1) % enabled.count]
+        return next.id == current ? nil : next.id
+    }
+
     // MARK: - Import / Export / Reset
 
     /// Переносимое подмножество конфигурации для экспорта/импорта. Исключает
